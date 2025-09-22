@@ -1,0 +1,2272 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>wordcloud2</title>
+<style type="text/css">@layer htmltools {
+.html-fill-container {
+display: flex;
+flex-direction: column;
+
+min-height: 0;
+min-width: 0;
+}
+.html-fill-container > .html-fill-item {
+
+flex: 1 1 auto;
+min-height: 0;
+min-width: 0;
+}
+.html-fill-container > :not(.html-fill-item) {
+
+flex: 0 0 auto;
+}
+}
+</style>
+<script>(function() {
+  // If window.HTMLWidgets is already defined, then use it; otherwise create a
+  // new object. This allows preceding code to set options that affect the
+  // initialization process (though none currently exist).
+  window.HTMLWidgets = window.HTMLWidgets || {};
+
+  // See if we're running in a viewer pane. If not, we're in a web browser.
+  var viewerMode = window.HTMLWidgets.viewerMode =
+      /\bviewer_pane=1\b/.test(window.location);
+
+  // See if we're running in Shiny mode. If not, it's a static document.
+  // Note that static widgets can appear in both Shiny and static modes, but
+  // obviously, Shiny widgets can only appear in Shiny apps/documents.
+  var shinyMode = window.HTMLWidgets.shinyMode =
+      typeof(window.Shiny) !== "undefined" && !!window.Shiny.outputBindings;
+
+  // We can't count on jQuery being available, so we implement our own
+  // version if necessary.
+  function querySelectorAll(scope, selector) {
+    if (typeof(jQuery) !== "undefined" && scope instanceof jQuery) {
+      return scope.find(selector);
+    }
+    if (scope.querySelectorAll) {
+      return scope.querySelectorAll(selector);
+    }
+  }
+
+  function asArray(value) {
+    if (value === null)
+      return [];
+    if ($.isArray(value))
+      return value;
+    return [value];
+  }
+
+  // Implement jQuery's extend
+  function extend(target /*, ... */) {
+    if (arguments.length == 1) {
+      return target;
+    }
+    for (var i = 1; i < arguments.length; i++) {
+      var source = arguments[i];
+      for (var prop in source) {
+        if (source.hasOwnProperty(prop)) {
+          target[prop] = source[prop];
+        }
+      }
+    }
+    return target;
+  }
+
+  // IE8 doesn't support Array.forEach.
+  function forEach(values, callback, thisArg) {
+    if (values.forEach) {
+      values.forEach(callback, thisArg);
+    } else {
+      for (var i = 0; i < values.length; i++) {
+        callback.call(thisArg, values[i], i, values);
+      }
+    }
+  }
+
+  // Replaces the specified method with the return value of funcSource.
+  //
+  // Note that funcSource should not BE the new method, it should be a function
+  // that RETURNS the new method. funcSource receives a single argument that is
+  // the overridden method, it can be called from the new method. The overridden
+  // method can be called like a regular function, it has the target permanently
+  // bound to it so "this" will work correctly.
+  function overrideMethod(target, methodName, funcSource) {
+    var superFunc = target[methodName] || function() {};
+    var superFuncBound = function() {
+      return superFunc.apply(target, arguments);
+    };
+    target[methodName] = funcSource(superFuncBound);
+  }
+
+  // Add a method to delegator that, when invoked, calls
+  // delegatee.methodName. If there is no such method on
+  // the delegatee, but there was one on delegator before
+  // delegateMethod was called, then the original version
+  // is invoked instead.
+  // For example:
+  //
+  // var a = {
+  //   method1: function() { console.log('a1'); }
+  //   method2: function() { console.log('a2'); }
+  // };
+  // var b = {
+  //   method1: function() { console.log('b1'); }
+  // };
+  // delegateMethod(a, b, "method1");
+  // delegateMethod(a, b, "method2");
+  // a.method1();
+  // a.method2();
+  //
+  // The output would be "b1", "a2".
+  function delegateMethod(delegator, delegatee, methodName) {
+    var inherited = delegator[methodName];
+    delegator[methodName] = function() {
+      var target = delegatee;
+      var method = delegatee[methodName];
+
+      // The method doesn't exist on the delegatee. Instead,
+      // call the method on the delegator, if it exists.
+      if (!method) {
+        target = delegator;
+        method = inherited;
+      }
+
+      if (method) {
+        return method.apply(target, arguments);
+      }
+    };
+  }
+
+  // Implement a vague facsimilie of jQuery's data method
+  function elementData(el, name, value) {
+    if (arguments.length == 2) {
+      return el["htmlwidget_data_" + name];
+    } else if (arguments.length == 3) {
+      el["htmlwidget_data_" + name] = value;
+      return el;
+    } else {
+      throw new Error("Wrong number of arguments for elementData: " +
+        arguments.length);
+    }
+  }
+
+  // http://stackoverflow.com/questions/3446170/escape-string-for-use-in-javascript-regex
+  function escapeRegExp(str) {
+    return str.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
+  }
+
+  function hasClass(el, className) {
+    var re = new RegExp("\\b" + escapeRegExp(className) + "\\b");
+    return re.test(el.className);
+  }
+
+  // elements - array (or array-like object) of HTML elements
+  // className - class name to test for
+  // include - if true, only return elements with given className;
+  //   if false, only return elements *without* given className
+  function filterByClass(elements, className, include) {
+    var results = [];
+    for (var i = 0; i < elements.length; i++) {
+      if (hasClass(elements[i], className) == include)
+        results.push(elements[i]);
+    }
+    return results;
+  }
+
+  function on(obj, eventName, func) {
+    if (obj.addEventListener) {
+      obj.addEventListener(eventName, func, false);
+    } else if (obj.attachEvent) {
+      obj.attachEvent(eventName, func);
+    }
+  }
+
+  function off(obj, eventName, func) {
+    if (obj.removeEventListener)
+      obj.removeEventListener(eventName, func, false);
+    else if (obj.detachEvent) {
+      obj.detachEvent(eventName, func);
+    }
+  }
+
+  // Translate array of values to top/right/bottom/left, as usual with
+  // the "padding" CSS property
+  // https://developer.mozilla.org/en-US/docs/Web/CSS/padding
+  function unpackPadding(value) {
+    if (typeof(value) === "number")
+      value = [value];
+    if (value.length === 1) {
+      return {top: value[0], right: value[0], bottom: value[0], left: value[0]};
+    }
+    if (value.length === 2) {
+      return {top: value[0], right: value[1], bottom: value[0], left: value[1]};
+    }
+    if (value.length === 3) {
+      return {top: value[0], right: value[1], bottom: value[2], left: value[1]};
+    }
+    if (value.length === 4) {
+      return {top: value[0], right: value[1], bottom: value[2], left: value[3]};
+    }
+  }
+
+  // Convert an unpacked padding object to a CSS value
+  function paddingToCss(paddingObj) {
+    return paddingObj.top + "px " + paddingObj.right + "px " + paddingObj.bottom + "px " + paddingObj.left + "px";
+  }
+
+  // Makes a number suitable for CSS
+  function px(x) {
+    if (typeof(x) === "number")
+      return x + "px";
+    else
+      return x;
+  }
+
+  // Retrieves runtime widget sizing information for an element.
+  // The return value is either null, or an object with fill, padding,
+  // defaultWidth, defaultHeight fields.
+  function sizingPolicy(el) {
+    var sizingEl = document.querySelector("script[data-for='" + el.id + "'][type='application/htmlwidget-sizing']");
+    if (!sizingEl)
+      return null;
+    var sp = JSON.parse(sizingEl.textContent || sizingEl.text || "{}");
+    if (viewerMode) {
+      return sp.viewer;
+    } else {
+      return sp.browser;
+    }
+  }
+
+  // @param tasks Array of strings (or falsy value, in which case no-op).
+  //   Each element must be a valid JavaScript expression that yields a
+  //   function. Or, can be an array of objects with "code" and "data"
+  //   properties; in this case, the "code" property should be a string
+  //   of JS that's an expr that yields a function, and "data" should be
+  //   an object that will be added as an additional argument when that
+  //   function is called.
+  // @param target The object that will be "this" for each function
+  //   execution.
+  // @param args Array of arguments to be passed to the functions. (The
+  //   same arguments will be passed to all functions.)
+  function evalAndRun(tasks, target, args) {
+    if (tasks) {
+      forEach(tasks, function(task) {
+        var theseArgs = args;
+        if (typeof(task) === "object") {
+          theseArgs = theseArgs.concat([task.data]);
+          task = task.code;
+        }
+        var taskFunc = tryEval(task);
+        if (typeof(taskFunc) !== "function") {
+          throw new Error("Task must be a function! Source:\n" + task);
+        }
+        taskFunc.apply(target, theseArgs);
+      });
+    }
+  }
+
+  // Attempt eval() both with and without enclosing in parentheses.
+  // Note that enclosing coerces a function declaration into
+  // an expression that eval() can parse
+  // (otherwise, a SyntaxError is thrown)
+  function tryEval(code) {
+    var result = null;
+    try {
+      result = eval("(" + code + ")");
+    } catch(error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      try {
+        result = eval(code);
+      } catch(e) {
+        if (e instanceof SyntaxError) {
+          throw error;
+        } else {
+          throw e;
+        }
+      }
+    }
+    return result;
+  }
+
+  function initSizing(el) {
+    var sizing = sizingPolicy(el);
+    if (!sizing)
+      return;
+
+    var cel = document.getElementById("htmlwidget_container");
+    if (!cel)
+      return;
+
+    if (typeof(sizing.padding) !== "undefined") {
+      document.body.style.margin = "0";
+      document.body.style.padding = paddingToCss(unpackPadding(sizing.padding));
+    }
+
+    if (sizing.fill) {
+      document.body.style.overflow = "hidden";
+      document.body.style.width = "100%";
+      document.body.style.height = "100%";
+      document.documentElement.style.width = "100%";
+      document.documentElement.style.height = "100%";
+      cel.style.position = "absolute";
+      var pad = unpackPadding(sizing.padding);
+      cel.style.top = pad.top + "px";
+      cel.style.right = pad.right + "px";
+      cel.style.bottom = pad.bottom + "px";
+      cel.style.left = pad.left + "px";
+      el.style.width = "100%";
+      el.style.height = "100%";
+
+      return {
+        getWidth: function() { return cel.getBoundingClientRect().width; },
+        getHeight: function() { return cel.getBoundingClientRect().height; }
+      };
+
+    } else {
+      el.style.width = px(sizing.width);
+      el.style.height = px(sizing.height);
+
+      return {
+        getWidth: function() { return cel.getBoundingClientRect().width; },
+        getHeight: function() { return cel.getBoundingClientRect().height; }
+      };
+    }
+  }
+
+  // Default implementations for methods
+  var defaults = {
+    find: function(scope) {
+      return querySelectorAll(scope, "." + this.name);
+    },
+    renderError: function(el, err) {
+      var $el = $(el);
+
+      this.clearError(el);
+
+      // Add all these error classes, as Shiny does
+      var errClass = "shiny-output-error";
+      if (err.type !== null) {
+        // use the classes of the error condition as CSS class names
+        errClass = errClass + " " + $.map(asArray(err.type), function(type) {
+          return errClass + "-" + type;
+        }).join(" ");
+      }
+      errClass = errClass + " htmlwidgets-error";
+
+      // Is el inline or block? If inline or inline-block, just display:none it
+      // and add an inline error.
+      var display = $el.css("display");
+      $el.data("restore-display-mode", display);
+
+      if (display === "inline" || display === "inline-block") {
+        $el.hide();
+        if (err.message !== "") {
+          var errorSpan = $("<span>").addClass(errClass);
+          errorSpan.text(err.message);
+          $el.after(errorSpan);
+        }
+      } else if (display === "block") {
+        // If block, add an error just after the el, set visibility:none on the
+        // el, and position the error to be on top of the el.
+        // Mark it with a unique ID and CSS class so we can remove it later.
+        $el.css("visibility", "hidden");
+        if (err.message !== "") {
+          var errorDiv = $("<div>").addClass(errClass).css("position", "absolute")
+            .css("top", el.offsetTop)
+            .css("left", el.offsetLeft)
+            // setting width can push out the page size, forcing otherwise
+            // unnecessary scrollbars to appear and making it impossible for
+            // the element to shrink; so use max-width instead
+            .css("maxWidth", el.offsetWidth)
+            .css("height", el.offsetHeight);
+          errorDiv.text(err.message);
+          $el.after(errorDiv);
+
+          // Really dumb way to keep the size/position of the error in sync with
+          // the parent element as the window is resized or whatever.
+          var intId = setInterval(function() {
+            if (!errorDiv[0].parentElement) {
+              clearInterval(intId);
+              return;
+            }
+            errorDiv
+              .css("top", el.offsetTop)
+              .css("left", el.offsetLeft)
+              .css("maxWidth", el.offsetWidth)
+              .css("height", el.offsetHeight);
+          }, 500);
+        }
+      }
+    },
+    clearError: function(el) {
+      var $el = $(el);
+      var display = $el.data("restore-display-mode");
+      $el.data("restore-display-mode", null);
+
+      if (display === "inline" || display === "inline-block") {
+        if (display)
+          $el.css("display", display);
+        $(el.nextSibling).filter(".htmlwidgets-error").remove();
+      } else if (display === "block"){
+        $el.css("visibility", "inherit");
+        $(el.nextSibling).filter(".htmlwidgets-error").remove();
+      }
+    },
+    sizing: {}
+  };
+
+  // Called by widget bindings to register a new type of widget. The definition
+  // object can contain the following properties:
+  // - name (required) - A string indicating the binding name, which will be
+  //   used by default as the CSS classname to look for.
+  // - initialize (optional) - A function(el) that will be called once per
+  //   widget element; if a value is returned, it will be passed as the third
+  //   value to renderValue.
+  // - renderValue (required) - A function(el, data, initValue) that will be
+  //   called with data. Static contexts will cause this to be called once per
+  //   element; Shiny apps will cause this to be called multiple times per
+  //   element, as the data changes.
+  window.HTMLWidgets.widget = function(definition) {
+    if (!definition.name) {
+      throw new Error("Widget must have a name");
+    }
+    if (!definition.type) {
+      throw new Error("Widget must have a type");
+    }
+    // Currently we only support output widgets
+    if (definition.type !== "output") {
+      throw new Error("Unrecognized widget type '" + definition.type + "'");
+    }
+    // TODO: Verify that .name is a valid CSS classname
+
+    // Support new-style instance-bound definitions. Old-style class-bound
+    // definitions have one widget "object" per widget per type/class of
+    // widget; the renderValue and resize methods on such widget objects
+    // take el and instance arguments, because the widget object can't
+    // store them. New-style instance-bound definitions have one widget
+    // object per widget instance; the definition that's passed in doesn't
+    // provide renderValue or resize methods at all, just the single method
+    //   factory(el, width, height)
+    // which returns an object that has renderValue(x) and resize(w, h).
+    // This enables a far more natural programming style for the widget
+    // author, who can store per-instance state using either OO-style
+    // instance fields or functional-style closure variables (I guess this
+    // is in contrast to what can only be called C-style pseudo-OO which is
+    // what we required before).
+    if (definition.factory) {
+      definition = createLegacyDefinitionAdapter(definition);
+    }
+
+    if (!definition.renderValue) {
+      throw new Error("Widget must have a renderValue function");
+    }
+
+    // For static rendering (non-Shiny), use a simple widget registration
+    // scheme. We also use this scheme for Shiny apps/documents that also
+    // contain static widgets.
+    window.HTMLWidgets.widgets = window.HTMLWidgets.widgets || [];
+    // Merge defaults into the definition; don't mutate the original definition.
+    var staticBinding = extend({}, defaults, definition);
+    overrideMethod(staticBinding, "find", function(superfunc) {
+      return function(scope) {
+        var results = superfunc(scope);
+        // Filter out Shiny outputs, we only want the static kind
+        return filterByClass(results, "html-widget-output", false);
+      };
+    });
+    window.HTMLWidgets.widgets.push(staticBinding);
+
+    if (shinyMode) {
+      // Shiny is running. Register the definition with an output binding.
+      // The definition itself will not be the output binding, instead
+      // we will make an output binding object that delegates to the
+      // definition. This is because we foolishly used the same method
+      // name (renderValue) for htmlwidgets definition and Shiny bindings
+      // but they actually have quite different semantics (the Shiny
+      // bindings receive data that includes lots of metadata that it
+      // strips off before calling htmlwidgets renderValue). We can't
+      // just ignore the difference because in some widgets it's helpful
+      // to call this.renderValue() from inside of resize(), and if
+      // we're not delegating, then that call will go to the Shiny
+      // version instead of the htmlwidgets version.
+
+      // Merge defaults with definition, without mutating either.
+      var bindingDef = extend({}, defaults, definition);
+
+      // This object will be our actual Shiny binding.
+      var shinyBinding = new Shiny.OutputBinding();
+
+      // With a few exceptions, we'll want to simply use the bindingDef's
+      // version of methods if they are available, otherwise fall back to
+      // Shiny's defaults. NOTE: If Shiny's output bindings gain additional
+      // methods in the future, and we want them to be overrideable by
+      // HTMLWidget binding definitions, then we'll need to add them to this
+      // list.
+      delegateMethod(shinyBinding, bindingDef, "getId");
+      delegateMethod(shinyBinding, bindingDef, "onValueChange");
+      delegateMethod(shinyBinding, bindingDef, "onValueError");
+      delegateMethod(shinyBinding, bindingDef, "renderError");
+      delegateMethod(shinyBinding, bindingDef, "clearError");
+      delegateMethod(shinyBinding, bindingDef, "showProgress");
+
+      // The find, renderValue, and resize are handled differently, because we
+      // want to actually decorate the behavior of the bindingDef methods.
+
+      shinyBinding.find = function(scope) {
+        var results = bindingDef.find(scope);
+
+        // Only return elements that are Shiny outputs, not static ones
+        var dynamicResults = results.filter(".html-widget-output");
+
+        // It's possible that whatever caused Shiny to think there might be
+        // new dynamic outputs, also caused there to be new static outputs.
+        // Since there might be lots of different htmlwidgets bindings, we
+        // schedule execution for later--no need to staticRender multiple
+        // times.
+        if (results.length !== dynamicResults.length)
+          scheduleStaticRender();
+
+        return dynamicResults;
+      };
+
+      // Wrap renderValue to handle initialization, which unfortunately isn't
+      // supported natively by Shiny at the time of this writing.
+
+      shinyBinding.renderValue = function(el, data) {
+        Shiny.renderDependencies(data.deps);
+        // Resolve strings marked as javascript literals to objects
+        if (!(data.evals instanceof Array)) data.evals = [data.evals];
+        for (var i = 0; data.evals && i < data.evals.length; i++) {
+          window.HTMLWidgets.evaluateStringMember(data.x, data.evals[i]);
+        }
+        if (!bindingDef.renderOnNullValue) {
+          if (data.x === null) {
+            el.style.visibility = "hidden";
+            return;
+          } else {
+            el.style.visibility = "inherit";
+          }
+        }
+        if (!elementData(el, "initialized")) {
+          initSizing(el);
+
+          elementData(el, "initialized", true);
+          if (bindingDef.initialize) {
+            var rect = el.getBoundingClientRect();
+            var result = bindingDef.initialize(el, rect.width, rect.height);
+            elementData(el, "init_result", result);
+          }
+        }
+        bindingDef.renderValue(el, data.x, elementData(el, "init_result"));
+        evalAndRun(data.jsHooks.render, elementData(el, "init_result"), [el, data.x]);
+      };
+
+      // Only override resize if bindingDef implements it
+      if (bindingDef.resize) {
+        shinyBinding.resize = function(el, width, height) {
+          // Shiny can call resize before initialize/renderValue have been
+          // called, which doesn't make sense for widgets.
+          if (elementData(el, "initialized")) {
+            bindingDef.resize(el, width, height, elementData(el, "init_result"));
+          }
+        };
+      }
+
+      Shiny.outputBindings.register(shinyBinding, bindingDef.name);
+    }
+  };
+
+  var scheduleStaticRenderTimerId = null;
+  function scheduleStaticRender() {
+    if (!scheduleStaticRenderTimerId) {
+      scheduleStaticRenderTimerId = setTimeout(function() {
+        scheduleStaticRenderTimerId = null;
+        window.HTMLWidgets.staticRender();
+      }, 1);
+    }
+  }
+
+  // Render static widgets after the document finishes loading
+  // Statically render all elements that are of this widget's class
+  window.HTMLWidgets.staticRender = function() {
+    var bindings = window.HTMLWidgets.widgets || [];
+    forEach(bindings, function(binding) {
+      var matches = binding.find(document.documentElement);
+      forEach(matches, function(el) {
+        var sizeObj = initSizing(el, binding);
+
+        var getSize = function(el) {
+          if (sizeObj) {
+            return {w: sizeObj.getWidth(), h: sizeObj.getHeight()}
+          } else {
+            var rect = el.getBoundingClientRect();
+            return {w: rect.width, h: rect.height}
+          }
+        };
+
+        if (hasClass(el, "html-widget-static-bound"))
+          return;
+        el.className = el.className + " html-widget-static-bound";
+
+        var initResult;
+        if (binding.initialize) {
+          var size = getSize(el);
+          initResult = binding.initialize(el, size.w, size.h);
+          elementData(el, "init_result", initResult);
+        }
+
+        if (binding.resize) {
+          var lastSize = getSize(el);
+          var resizeHandler = function(e) {
+            var size = getSize(el);
+            if (size.w === 0 && size.h === 0)
+              return;
+            if (size.w === lastSize.w && size.h === lastSize.h)
+              return;
+            lastSize = size;
+            binding.resize(el, size.w, size.h, initResult);
+          };
+
+          on(window, "resize", resizeHandler);
+
+          // This is needed for cases where we're running in a Shiny
+          // app, but the widget itself is not a Shiny output, but
+          // rather a simple static widget. One example of this is
+          // an rmarkdown document that has runtime:shiny and widget
+          // that isn't in a render function. Shiny only knows to
+          // call resize handlers for Shiny outputs, not for static
+          // widgets, so we do it ourselves.
+          if (window.jQuery) {
+            window.jQuery(document).on(
+              "shown.htmlwidgets shown.bs.tab.htmlwidgets shown.bs.collapse.htmlwidgets",
+              resizeHandler
+            );
+            window.jQuery(document).on(
+              "hidden.htmlwidgets hidden.bs.tab.htmlwidgets hidden.bs.collapse.htmlwidgets",
+              resizeHandler
+            );
+          }
+
+          // This is needed for the specific case of ioslides, which
+          // flips slides between display:none and display:block.
+          // Ideally we would not have to have ioslide-specific code
+          // here, but rather have ioslides raise a generic event,
+          // but the rmarkdown package just went to CRAN so the
+          // window to getting that fixed may be long.
+          if (window.addEventListener) {
+            // It's OK to limit this to window.addEventListener
+            // browsers because ioslides itself only supports
+            // such browsers.
+            on(document, "slideenter", resizeHandler);
+            on(document, "slideleave", resizeHandler);
+          }
+        }
+
+        var scriptData = document.querySelector("script[data-for='" + el.id + "'][type='application/json']");
+        if (scriptData) {
+          var data = JSON.parse(scriptData.textContent || scriptData.text);
+          // Resolve strings marked as javascript literals to objects
+          if (!(data.evals instanceof Array)) data.evals = [data.evals];
+          for (var k = 0; data.evals && k < data.evals.length; k++) {
+            window.HTMLWidgets.evaluateStringMember(data.x, data.evals[k]);
+          }
+          binding.renderValue(el, data.x, initResult);
+          evalAndRun(data.jsHooks.render, initResult, [el, data.x]);
+        }
+      });
+    });
+
+    invokePostRenderHandlers();
+  }
+
+
+  function has_jQuery3() {
+    if (!window.jQuery) {
+      return false;
+    }
+    var $version = window.jQuery.fn.jquery;
+    var $major_version = parseInt($version.split(".")[0]);
+    return $major_version >= 3;
+  }
+
+  /*
+  / Shiny 1.4 bumped jQuery from 1.x to 3.x which means jQuery's
+  / on-ready handler (i.e., $(fn)) is now asyncronous (i.e., it now
+  / really means $(setTimeout(fn)).
+  / https://jquery.com/upgrade-guide/3.0/#breaking-change-document-ready-handlers-are-now-asynchronous
+  /
+  / Since Shiny uses $() to schedule initShiny, shiny>=1.4 calls initShiny
+  / one tick later than it did before, which means staticRender() is
+  / called renderValue() earlier than (advanced) widget authors might be expecting.
+  / https://github.com/rstudio/shiny/issues/2630
+  /
+  / For a concrete example, leaflet has some methods (e.g., updateBounds)
+  / which reference Shiny methods registered in initShiny (e.g., setInputValue).
+  / Since leaflet is privy to this life-cycle, it knows to use setTimeout() to
+  / delay execution of those methods (until Shiny methods are ready)
+  / https://github.com/rstudio/leaflet/blob/18ec981/javascript/src/index.js#L266-L268
+  /
+  / Ideally widget authors wouldn't need to use this setTimeout() hack that
+  / leaflet uses to call Shiny methods on a staticRender(). In the long run,
+  / the logic initShiny should be broken up so that method registration happens
+  / right away, but binding happens later.
+  */
+  function maybeStaticRenderLater() {
+    if (shinyMode && has_jQuery3()) {
+      window.jQuery(window.HTMLWidgets.staticRender);
+    } else {
+      window.HTMLWidgets.staticRender();
+    }
+  }
+
+  if (document.addEventListener) {
+    document.addEventListener("DOMContentLoaded", function() {
+      document.removeEventListener("DOMContentLoaded", arguments.callee, false);
+      maybeStaticRenderLater();
+    }, false);
+  } else if (document.attachEvent) {
+    document.attachEvent("onreadystatechange", function() {
+      if (document.readyState === "complete") {
+        document.detachEvent("onreadystatechange", arguments.callee);
+        maybeStaticRenderLater();
+      }
+    });
+  }
+
+
+  window.HTMLWidgets.getAttachmentUrl = function(depname, key) {
+    // If no key, default to the first item
+    if (typeof(key) === "undefined")
+      key = 1;
+
+    var link = document.getElementById(depname + "-" + key + "-attachment");
+    if (!link) {
+      throw new Error("Attachment " + depname + "/" + key + " not found in document");
+    }
+    return link.getAttribute("href");
+  };
+
+  window.HTMLWidgets.dataframeToD3 = function(df) {
+    var names = [];
+    var length;
+    for (var name in df) {
+        if (df.hasOwnProperty(name))
+            names.push(name);
+        if (typeof(df[name]) !== "object" || typeof(df[name].length) === "undefined") {
+            throw new Error("All fields must be arrays");
+        } else if (typeof(length) !== "undefined" && length !== df[name].length) {
+            throw new Error("All fields must be arrays of the same length");
+        }
+        length = df[name].length;
+    }
+    var results = [];
+    var item;
+    for (var row = 0; row < length; row++) {
+        item = {};
+        for (var col = 0; col < names.length; col++) {
+            item[names[col]] = df[names[col]][row];
+        }
+        results.push(item);
+    }
+    return results;
+  };
+
+  window.HTMLWidgets.transposeArray2D = function(array) {
+      if (array.length === 0) return array;
+      var newArray = array[0].map(function(col, i) {
+          return array.map(function(row) {
+              return row[i]
+          })
+      });
+      return newArray;
+  };
+  // Split value at splitChar, but allow splitChar to be escaped
+  // using escapeChar. Any other characters escaped by escapeChar
+  // will be included as usual (including escapeChar itself).
+  function splitWithEscape(value, splitChar, escapeChar) {
+    var results = [];
+    var escapeMode = false;
+    var currentResult = "";
+    for (var pos = 0; pos < value.length; pos++) {
+      if (!escapeMode) {
+        if (value[pos] === splitChar) {
+          results.push(currentResult);
+          currentResult = "";
+        } else if (value[pos] === escapeChar) {
+          escapeMode = true;
+        } else {
+          currentResult += value[pos];
+        }
+      } else {
+        currentResult += value[pos];
+        escapeMode = false;
+      }
+    }
+    if (currentResult !== "") {
+      results.push(currentResult);
+    }
+    return results;
+  }
+  // Function authored by Yihui/JJ Allaire
+  window.HTMLWidgets.evaluateStringMember = function(o, member) {
+    var parts = splitWithEscape(member, '.', '\\');
+    for (var i = 0, l = parts.length; i < l; i++) {
+      var part = parts[i];
+      // part may be a character or 'numeric' member name
+      if (o !== null && typeof o === "object" && part in o) {
+        if (i == (l - 1)) { // if we are at the end of the line then evalulate
+          if (typeof o[part] === "string")
+            o[part] = tryEval(o[part]);
+        } else { // otherwise continue to next embedded object
+          o = o[part];
+        }
+      }
+    }
+  };
+
+  // Retrieve the HTMLWidget instance (i.e. the return value of an
+  // HTMLWidget binding's initialize() or factory() function)
+  // associated with an element, or null if none.
+  window.HTMLWidgets.getInstance = function(el) {
+    return elementData(el, "init_result");
+  };
+
+  // Finds the first element in the scope that matches the selector,
+  // and returns the HTMLWidget instance (i.e. the return value of
+  // an HTMLWidget binding's initialize() or factory() function)
+  // associated with that element, if any. If no element matches the
+  // selector, or the first matching element has no HTMLWidget
+  // instance associated with it, then null is returned.
+  //
+  // The scope argument is optional, and defaults to window.document.
+  window.HTMLWidgets.find = function(scope, selector) {
+    if (arguments.length == 1) {
+      selector = scope;
+      scope = document;
+    }
+
+    var el = scope.querySelector(selector);
+    if (el === null) {
+      return null;
+    } else {
+      return window.HTMLWidgets.getInstance(el);
+    }
+  };
+
+  // Finds all elements in the scope that match the selector, and
+  // returns the HTMLWidget instances (i.e. the return values of
+  // an HTMLWidget binding's initialize() or factory() function)
+  // associated with the elements, in an array. If elements that
+  // match the selector don't have an associated HTMLWidget
+  // instance, the returned array will contain nulls.
+  //
+  // The scope argument is optional, and defaults to window.document.
+  window.HTMLWidgets.findAll = function(scope, selector) {
+    if (arguments.length == 1) {
+      selector = scope;
+      scope = document;
+    }
+
+    var nodes = scope.querySelectorAll(selector);
+    var results = [];
+    for (var i = 0; i < nodes.length; i++) {
+      results.push(window.HTMLWidgets.getInstance(nodes[i]));
+    }
+    return results;
+  };
+
+  var postRenderHandlers = [];
+  function invokePostRenderHandlers() {
+    while (postRenderHandlers.length) {
+      var handler = postRenderHandlers.shift();
+      if (handler) {
+        handler();
+      }
+    }
+  }
+
+  // Register the given callback function to be invoked after the
+  // next time static widgets are rendered.
+  window.HTMLWidgets.addPostRenderHandler = function(callback) {
+    postRenderHandlers.push(callback);
+  };
+
+  // Takes a new-style instance-bound definition, and returns an
+  // old-style class-bound definition. This saves us from having
+  // to rewrite all the logic in this file to accomodate both
+  // types of definitions.
+  function createLegacyDefinitionAdapter(defn) {
+    var result = {
+      name: defn.name,
+      type: defn.type,
+      initialize: function(el, width, height) {
+        return defn.factory(el, width, height);
+      },
+      renderValue: function(el, x, instance) {
+        return instance.renderValue(x);
+      },
+      resize: function(el, width, height, instance) {
+        return instance.resize(width, height);
+      }
+    };
+
+    if (defn.find)
+      result.find = defn.find;
+    if (defn.renderError)
+      result.renderError = defn.renderError;
+    if (defn.clearError)
+      result.clearError = defn.clearError;
+
+    return result;
+  }
+})();
+</script>
+<style type="text/css">#wcLabel {position: absolute;border: 2px solid #fff;box-shadow: 0 0 4px 0 #008;padding: 2px;pointer-events: none; }#wcSpan {position: absolute;top: 100%;left: 0;background-color: rgba(255, 255, 255, 0.8);color: #333;margin-top: 6px;padding: 0 0.5em;border-radius: 0.5em;white-space: nowrap; }</style>
+<script>/*!
+ * wordcloud2.js
+ * http://timdream.org/wordcloud2.js/
+ *
+ * Copyright 2011 - 2013 Tim Chien
+ * Released under the MIT license
+ */
+
+'use strict';
+
+// setImmediate
+if (!window.setImmediate) {
+  window.setImmediate = (function setupSetImmediate() {
+    return window.msSetImmediate ||
+    window.webkitSetImmediate ||
+    window.mozSetImmediate ||
+    window.oSetImmediate ||
+    (function setupSetZeroTimeout() {
+      if (!window.postMessage || !window.addEventListener) {
+        return null;
+      }
+
+      var callbacks = [undefined];
+      var message = 'zero-timeout-message';
+
+      // Like setTimeout, but only takes a function argument.  There's
+      // no time argument (always zero) and no arguments (you have to
+      // use a closure).
+      var setZeroTimeout = function setZeroTimeout(callback) {
+        var id = callbacks.length;
+        callbacks.push(callback);
+        window.postMessage(message + id.toString(36), '*');
+
+        return id;
+      };
+
+      window.addEventListener('message', function setZeroTimeoutMessage(evt) {
+        // Skipping checking event source, retarded IE confused this window
+        // object with another in the presence of iframe
+        if (typeof evt.data !== 'string' ||
+            evt.data.substr(0, message.length) !== message/* ||
+            evt.source !== window */) {
+          return;
+        }
+
+        evt.stopImmediatePropagation();
+
+        var id = parseInt(evt.data.substr(message.length), 36);
+        if (!callbacks[id]) {
+          return;
+        }
+
+        callbacks[id]();
+        callbacks[id] = undefined;
+      }, true);
+
+      /* specify clearImmediate() here since we need the scope */
+      window.clearImmediate = function clearZeroTimeout(id) {
+        if (!callbacks[id]) {
+          return;
+        }
+
+        callbacks[id] = undefined;
+      };
+
+      return setZeroTimeout;
+    })() ||
+    // fallback
+    function setImmediateFallback(fn) {
+      window.setTimeout(fn, 0);
+    };
+  })();
+}
+
+if (!window.clearImmediate) {
+  window.clearImmediate = (function setupClearImmediate() {
+    return window.msClearImmediate ||
+    window.webkitClearImmediate ||
+    window.mozClearImmediate ||
+    window.oClearImmediate ||
+    // "clearZeroTimeout" is implement on the previous block ||
+    // fallback
+    function clearImmediateFallback(timer) {
+      window.clearTimeout(timer);
+    };
+  })();
+}
+
+(function(global) {
+
+  // Check if WordCloud can run on this browser
+  var isSupported = (function isSupported() {
+    var canvas = document.createElement('canvas');
+    if (!canvas || !canvas.getContext) {
+      return false;
+    }
+
+    var ctx = canvas.getContext('2d');
+    if (!ctx.getImageData) {
+      return false;
+    }
+    if (!ctx.fillText) {
+      return false;
+    }
+
+    if (!Array.prototype.some) {
+      return false;
+    }
+    if (!Array.prototype.push) {
+      return false;
+    }
+
+    return true;
+  }());
+
+  // Find out if the browser impose minium font size by
+  // drawing small texts on a canvas and measure it's width.
+  var minFontSize = (function getMinFontSize() {
+    if (!isSupported) {
+      return;
+    }
+
+    var ctx = document.createElement('canvas').getContext('2d');
+
+    // start from 20
+    var size = 20;
+
+    // two sizes to measure
+    var hanWidth, mWidth;
+
+    while (size) {
+      ctx.font = size.toString(10) + 'px sans-serif';
+      if ((ctx.measureText('\uFF37').width === hanWidth) &&
+          (ctx.measureText('m').width) === mWidth) {
+        return (size + 1);
+      }
+
+      hanWidth = ctx.measureText('\uFF37').width;
+      mWidth = ctx.measureText('m').width;
+
+      size--;
+    }
+
+    return 0;
+  })();
+
+  // Based on http://jsfromhell.com/array/shuffle
+  var shuffleArray = function shuffleArray(arr) {
+    for (var j, x, i = arr.length; i;
+      j = Math.floor(Math.random() * i),
+      x = arr[--i], arr[i] = arr[j],
+      arr[j] = x) {}
+    return arr;
+  };
+
+  var WordCloud = function WordCloud(elements, options) {
+    if (!isSupported) {
+      return;
+    }
+
+    if (!Array.isArray(elements)) {
+      elements = [elements];
+    }
+
+    elements.forEach(function(el, i) {
+      if (typeof el === 'string') {
+        elements[i] = document.getElementById(el);
+        if (!elements[i]) {
+          throw 'The element id specified is not found.';
+        }
+      } else if (!el.tagName && !el.appendChild) {
+        throw 'You must pass valid HTML elements, or ID of the element.';
+      }
+    });
+
+    /* Default values to be overwritten by options object */
+    var settings = {
+      list: [],
+      fontFamily: '"Trebuchet MS", "Heiti TC", "微軟正黑體", ' +
+                  '"Arial Unicode MS", "Droid Fallback Sans", sans-serif',
+      fontWeight: 'normal',
+      color: 'random-dark',
+      minSize: 0, // 0 to disable
+      weightFactor: 1,
+      clearCanvas: true,
+      backgroundColor: '#fff',  // opaque white = rgba(255, 255, 255, 1)
+
+      gridSize: 8,
+      origin: null,
+
+      drawMask: false,
+      maskColor: 'rgba(255,0,0,0.3)',
+      maskGapWidth: 0.3,
+
+      wait: 0,
+      abortThreshold: 0, // disabled
+      abort: function noop() {},
+
+      minRotation: - Math.PI / 2,
+      maxRotation: Math.PI / 2,
+
+      shuffle: true,
+      rotateRatio: 0.1,
+
+      shape: 'circle',
+      ellipticity: 0.65,
+
+      classes: null,
+
+      hover: null,
+      click: null
+    };
+
+    if (options) {
+      for (var key in options) {
+        if (key in settings) {
+          settings[key] = options[key];
+        }
+      }
+    }
+
+    /* Convert weightFactor into a function */
+    if (typeof settings.weightFactor !== 'function') {
+      var factor = settings.weightFactor;
+      settings.weightFactor = function weightFactor(pt) {
+        return pt * factor; //in px
+      };
+    }
+
+    /* Convert shape into a function */
+    if (typeof settings.shape !== 'function') {
+      switch (settings.shape) {
+        case 'circle':
+        /* falls through */
+        default:
+          // 'circle' is the default and a shortcut in the code loop.
+          settings.shape = 'circle';
+          break;
+
+        case 'cardioid':
+          settings.shape = function shapeCardioid(theta) {
+            return 1 - Math.sin(theta);
+          };
+          break;
+
+        /*
+
+        To work out an X-gon, one has to calculate "m",
+        where 1/(cos(2*PI/X)+m*sin(2*PI/X)) = 1/(cos(0)+m*sin(0))
+        http://www.wolframalpha.com/input/?i=1%2F%28cos%282*PI%2FX%29%2Bm*sin%28
+        2*PI%2FX%29%29+%3D+1%2F%28cos%280%29%2Bm*sin%280%29%29
+
+        Copy the solution into polar equation r = 1/(cos(t') + m*sin(t'))
+        where t' equals to mod(t, 2PI/X);
+
+        */
+
+        case 'diamond':
+        case 'square':
+          // http://www.wolframalpha.com/input/?i=plot+r+%3D+1%2F%28cos%28mod+
+          // %28t%2C+PI%2F2%29%29%2Bsin%28mod+%28t%2C+PI%2F2%29%29%29%2C+t+%3D
+          // +0+..+2*PI
+          settings.shape = function shapeSquare(theta) {
+            var thetaPrime = theta % (2 * Math.PI / 4);
+            return 1 / (Math.cos(thetaPrime) + Math.sin(thetaPrime));
+          };
+          break;
+
+        case 'triangle-forward':
+          // http://www.wolframalpha.com/input/?i=plot+r+%3D+1%2F%28cos%28mod+
+          // %28t%2C+2*PI%2F3%29%29%2Bsqrt%283%29sin%28mod+%28t%2C+2*PI%2F3%29
+          // %29%29%2C+t+%3D+0+..+2*PI
+          settings.shape = function shapeTriangle(theta) {
+            var thetaPrime = theta % (2 * Math.PI / 3);
+            return 1 / (Math.cos(thetaPrime) +
+                        Math.sqrt(3) * Math.sin(thetaPrime));
+          };
+          break;
+
+        case 'triangle':
+        case 'triangle-upright':
+          settings.shape = function shapeTriangle(theta) {
+            var thetaPrime = (theta + Math.PI * 3 / 2) % (2 * Math.PI / 3);
+            return 1 / (Math.cos(thetaPrime) +
+                        Math.sqrt(3) * Math.sin(thetaPrime));
+          };
+          break;
+
+        case 'pentagon':
+          settings.shape = function shapePentagon(theta) {
+            var thetaPrime = (theta + 0.955) % (2 * Math.PI / 5);
+            return 1 / (Math.cos(thetaPrime) +
+                        0.726543 * Math.sin(thetaPrime));
+          };
+          break;
+
+        case 'star':
+          settings.shape = function shapeStar(theta) {
+            var thetaPrime = (theta + 0.955) % (2 * Math.PI / 10);
+            if ((theta + 0.955) % (2 * Math.PI / 5) - (2 * Math.PI / 10) >= 0) {
+              return 1 / (Math.cos((2 * Math.PI / 10) - thetaPrime) +
+                          3.07768 * Math.sin((2 * Math.PI / 10) - thetaPrime));
+            } else {
+              return 1 / (Math.cos(thetaPrime) +
+                          3.07768 * Math.sin(thetaPrime));
+            }
+          };
+          break;
+      }
+    }
+
+    /* Make sure gridSize is a whole number and is not smaller than 4px */
+    settings.gridSize = Math.max(Math.floor(settings.gridSize), 4);
+
+    /* shorthand */
+    var g = settings.gridSize;
+    var maskRectWidth = g - settings.maskGapWidth;
+
+    /* normalize rotation settings */
+    var rotationRange = Math.abs(settings.maxRotation - settings.minRotation);
+    var minRotation = Math.min(settings.maxRotation, settings.minRotation);
+
+    /* information/object available to all functions, set when start() */
+    var grid, // 2d array containing filling information
+      ngx, ngy, // width and height of the grid
+      center, // position of the center of the cloud
+      maxRadius;
+
+    /* timestamp for measuring each putWord() action */
+    var escapeTime;
+
+    /* function for getting the color of the text */
+    var getTextColor;
+    function random_hsl_color(min, max) {
+      return 'hsl(' +
+        (Math.random() * 360).toFixed() + ',' +
+        (Math.random() * 30 + 70).toFixed() + '%,' +
+        (Math.random() * (max - min) + min).toFixed() + '%)';
+    }
+    switch (settings.color) {
+      case 'random-dark':
+        getTextColor = function getRandomDarkColor() {
+          return random_hsl_color(10, 50);
+        };
+        break;
+
+      case 'random-light':
+        getTextColor = function getRandomLightColor() {
+          return random_hsl_color(50, 90);
+        };
+        break;
+
+      default:
+        if (typeof settings.color === 'function') {
+          getTextColor = settings.color;
+        }
+        break;
+    }
+
+    /* function for getting the classes of the text */
+    var getTextClasses = null;
+    if (typeof settings.classes === 'function') {
+      getTextClasses = settings.classes;
+    }
+
+    /* Interactive */
+    var interactive = false;
+    var infoGrid = [];
+    var hovered;
+
+    var getInfoGridFromMouseTouchEvent =
+    function getInfoGridFromMouseTouchEvent(evt) {
+      var canvas = evt.currentTarget;
+      var rect = canvas.getBoundingClientRect();
+      var clientX;
+      var clientY;
+      /** Detect if touches are available */
+      if (evt.touches) {
+        clientX = evt.touches[0].clientX;
+        clientY = evt.touches[0].clientY;
+      } else {
+        clientX = evt.clientX;
+        clientY = evt.clientY;
+      }
+      var eventX = clientX - rect.left;
+      var eventY = clientY - rect.top;
+
+      var x = Math.floor(eventX * ((canvas.width / rect.width) || 1) / g);
+      var y = Math.floor(eventY * ((canvas.height / rect.height) || 1) / g);
+
+      return infoGrid[x][y];
+    };
+
+    var wordcloudhover = function wordcloudhover(evt) {
+      var info = getInfoGridFromMouseTouchEvent(evt);
+
+      if (hovered === info) {
+        return;
+      }
+
+      hovered = info;
+      if (!info) {
+        settings.hover(undefined, undefined, evt);
+
+        return;
+      }
+
+      settings.hover(info.item, info.dimension, evt);
+
+    };
+
+    var wordcloudclick = function wordcloudclick(evt) {
+      var info = getInfoGridFromMouseTouchEvent(evt);
+      if (!info) {
+        return;
+      }
+
+      settings.click(info.item, info.dimension, evt);
+      evt.preventDefault();
+    };
+
+    /* Get points on the grid for a given radius away from the center */
+    var pointsAtRadius = [];
+    var getPointsAtRadius = function getPointsAtRadius(radius) {
+      if (pointsAtRadius[radius]) {
+        return pointsAtRadius[radius];
+      }
+
+      // Look for these number of points on each radius
+      var T = radius * 8;
+
+      // Getting all the points at this radius
+      var t = T;
+      var points = [];
+
+      if (radius === 0) {
+        points.push([center[0], center[1], 0]);
+      }
+
+      while (t--) {
+        // distort the radius to put the cloud in shape
+        var rx = 1;
+        if (settings.shape !== 'circle') {
+          rx = settings.shape(t / T * 2 * Math.PI); // 0 to 1
+        }
+
+        // Push [x, y, t]; t is used solely for getTextColor()
+        points.push([
+          center[0] + radius * rx * Math.cos(-t / T * 2 * Math.PI),
+          center[1] + radius * rx * Math.sin(-t / T * 2 * Math.PI) *
+            settings.ellipticity,
+          t / T * 2 * Math.PI]);
+      }
+
+      pointsAtRadius[radius] = points;
+      return points;
+    };
+
+    /* Return true if we had spent too much time */
+    var exceedTime = function exceedTime() {
+      return ((settings.abortThreshold > 0) &&
+        ((new Date()).getTime() - escapeTime > settings.abortThreshold));
+    };
+
+    /* Get the deg of rotation according to settings, and luck. */
+    var getRotateDeg = function getRotateDeg() {
+      if (settings.rotateRatio === 0) {
+        return 0;
+      }
+
+      if (Math.random() > settings.rotateRatio) {
+        return 0;
+      }
+
+      if (rotationRange === 0) {
+        return minRotation;
+      }
+
+      return minRotation + Math.random() * rotationRange;
+    };
+
+    var getTextInfo = function getTextInfo(word, weight, rotateDeg) {
+      // calculate the acutal font size
+      // fontSize === 0 means weightFactor function wants the text skipped,
+      // and size < minSize means we cannot draw the text.
+      var debug = false;
+      var fontSize = settings.weightFactor(weight);
+      if (fontSize <= settings.minSize) {
+        return false;
+      }
+
+      // Scale factor here is to make sure fillText is not limited by
+      // the minium font size set by browser.
+      // It will always be 1 or 2n.
+      var mu = 1;
+      if (fontSize < minFontSize) {
+        mu = (function calculateScaleFactor() {
+          var mu = 2;
+          while (mu * fontSize < minFontSize) {
+            mu += 2;
+          }
+          return mu;
+        })();
+      }
+
+      var fcanvas = document.createElement('canvas');
+      var fctx = fcanvas.getContext('2d', { willReadFrequently: true });
+
+      fctx.font = settings.fontWeight + ' ' +
+        (fontSize * mu).toString(10) + 'px ' + settings.fontFamily;
+
+      // Estimate the dimension of the text with measureText().
+      var fw = fctx.measureText(word).width / mu;
+      var fh = Math.max(fontSize * mu,
+                        fctx.measureText('m').width,
+                        fctx.measureText('\uFF37').width) / mu;
+
+      // Create a boundary box that is larger than our estimates,
+      // so text don't get cut of (it sill might)
+      var boxWidth = fw + fh * 2;
+      var boxHeight = fh * 3;
+      var fgw = Math.ceil(boxWidth / g);
+      var fgh = Math.ceil(boxHeight / g);
+      boxWidth = fgw * g;
+      boxHeight = fgh * g;
+
+      // Calculate the proper offsets to make the text centered at
+      // the preferred position.
+
+      // This is simply half of the width.
+      var fillTextOffsetX = - fw / 2;
+      // Instead of moving the box to the exact middle of the preferred
+      // position, for Y-offset we move 0.4 instead, so Latin alphabets look
+      // vertical centered.
+      var fillTextOffsetY = - fh * 0.4;
+
+      // Calculate the actual dimension of the canvas, considering the rotation.
+      var cgh = Math.ceil((boxWidth * Math.abs(Math.sin(rotateDeg)) +
+                           boxHeight * Math.abs(Math.cos(rotateDeg))) / g);
+      var cgw = Math.ceil((boxWidth * Math.abs(Math.cos(rotateDeg)) +
+                           boxHeight * Math.abs(Math.sin(rotateDeg))) / g);
+      var width = cgw * g;
+      var height = cgh * g;
+
+      fcanvas.setAttribute('width', width);
+      fcanvas.setAttribute('height', height);
+
+      if (debug) {
+        // Attach fcanvas to the DOM
+        document.body.appendChild(fcanvas);
+        // Save it's state so that we could restore and draw the grid correctly.
+        fctx.save();
+      }
+
+      // Scale the canvas with |mu|.
+      fctx.scale(1 / mu, 1 / mu);
+      fctx.translate(width * mu / 2, height * mu / 2);
+      fctx.rotate(- rotateDeg);
+
+      // Once the width/height is set, ctx info will be reset.
+      // Set it again here.
+      fctx.font = settings.fontWeight + ' ' +
+        (fontSize * mu).toString(10) + 'px ' + settings.fontFamily;
+
+      // Fill the text into the fcanvas.
+      // XXX: We cannot because textBaseline = 'top' here because
+      // Firefox and Chrome uses different default line-height for canvas.
+      // Please read https://bugzil.la/737852#c6.
+      // Here, we use textBaseline = 'middle' and draw the text at exactly
+      // 0.5 * fontSize lower.
+      fctx.fillStyle = '#000';
+      fctx.textBaseline = 'middle';
+      fctx.fillText(word, fillTextOffsetX * mu,
+                    (fillTextOffsetY + fontSize * 0.5) * mu);
+
+      // Get the pixels of the text
+      var imageData = fctx.getImageData(0, 0, width, height).data;
+
+      if (exceedTime()) {
+        return false;
+      }
+
+      if (debug) {
+        // Draw the box of the original estimation
+        fctx.strokeRect(fillTextOffsetX * mu,
+                        fillTextOffsetY, fw * mu, fh * mu);
+        fctx.restore();
+      }
+
+      // Read the pixels and save the information to the occupied array
+      var occupied = [];
+      var gx = cgw, gy, x, y;
+      var bounds = [cgh / 2, cgw / 2, cgh / 2, cgw / 2];
+      while (gx--) {
+        gy = cgh;
+        while (gy--) {
+          y = g;
+          singleGridLoop: {
+            while (y--) {
+              x = g;
+              while (x--) {
+                if (imageData[((gy * g + y) * width +
+                               (gx * g + x)) * 4 + 3]) {
+                  occupied.push([gx, gy]);
+
+                  if (gx < bounds[3]) {
+                    bounds[3] = gx;
+                  }
+                  if (gx > bounds[1]) {
+                    bounds[1] = gx;
+                  }
+                  if (gy < bounds[0]) {
+                    bounds[0] = gy;
+                  }
+                  if (gy > bounds[2]) {
+                    bounds[2] = gy;
+                  }
+
+                  if (debug) {
+                    fctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+                    fctx.fillRect(gx * g, gy * g, g - 0.5, g - 0.5);
+                  }
+                  break singleGridLoop;
+                }
+              }
+            }
+            if (debug) {
+              fctx.fillStyle = 'rgba(0, 0, 255, 0.5)';
+              fctx.fillRect(gx * g, gy * g, g - 0.5, g - 0.5);
+            }
+          }
+        }
+      }
+
+      if (debug) {
+        fctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
+        fctx.fillRect(bounds[3] * g,
+                      bounds[0] * g,
+                      (bounds[1] - bounds[3] + 1) * g,
+                      (bounds[2] - bounds[0] + 1) * g);
+      }
+
+      // Return information needed to create the text on the real canvas
+      return {
+        mu: mu,
+        occupied: occupied,
+        bounds: bounds,
+        gw: cgw,
+        gh: cgh,
+        fillTextOffsetX: fillTextOffsetX,
+        fillTextOffsetY: fillTextOffsetY,
+        fillTextWidth: fw,
+        fillTextHeight: fh,
+        fontSize: fontSize
+      };
+    };
+
+    /* Determine if there is room available in the given dimension */
+    var canFitText = function canFitText(gx, gy, gw, gh, occupied) {
+      // Go through the occupied points,
+      // return false if the space is not available.
+      var i = occupied.length;
+      while (i--) {
+        var px = gx + occupied[i][0];
+        var py = gy + occupied[i][1];
+
+        if (px >= ngx || py >= ngy || px < 0 || py < 0 || !grid[px][py]) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    /* Actually draw the text on the grid */
+    var drawText = function drawText(gx, gy, info, word, weight,
+                                     distance, theta, rotateDeg, attributes) {
+
+      var fontSize = info.fontSize;
+      var color;
+      if (getTextColor) {
+        color = getTextColor(word, weight, fontSize, distance, theta);
+      } else if (settings.color instanceof Array) {
+        color = settings.color.shift() || 'black'; // pass a array in setting, default 'black'
+      } else {
+        color = settings.color;
+      }
+
+      var classes;
+      if (getTextClasses) {
+        classes = getTextClasses(word, weight, fontSize, distance, theta);
+      } else {
+        classes = settings.classes;
+      }
+
+      var dimension;
+      var bounds = info.bounds;
+      dimension = {
+        x: (gx + bounds[3]) * g,
+        y: (gy + bounds[0]) * g,
+        w: (bounds[1] - bounds[3] + 1) * g,
+        h: (bounds[2] - bounds[0] + 1) * g
+      };
+
+      elements.forEach(function(el) {
+        if (el.getContext) {
+          var ctx = el.getContext('2d');
+          var mu = info.mu;
+
+          // Save the current state before messing it
+          ctx.save();
+          ctx.scale(1 / mu, 1 / mu);
+
+          ctx.font = settings.fontWeight + ' ' +
+                     (fontSize * mu).toString(10) + 'px ' + settings.fontFamily;
+          ctx.fillStyle = color;
+
+          // Translate the canvas position to the origin coordinate of where
+          // the text should be put.
+          ctx.translate((gx + info.gw / 2) * g * mu,
+                        (gy + info.gh / 2) * g * mu);
+
+          if (rotateDeg !== 0) {
+            ctx.rotate(- rotateDeg);
+          }
+
+          // Finally, fill the text.
+
+          // XXX: We cannot because textBaseline = 'top' here because
+          // Firefox and Chrome uses different default line-height for canvas.
+          // Please read https://bugzil.la/737852#c6.
+          // Here, we use textBaseline = 'middle' and draw the text at exactly
+          // 0.5 * fontSize lower.
+          ctx.textBaseline = 'middle';
+          ctx.fillText(word, info.fillTextOffsetX * mu,
+                             (info.fillTextOffsetY + fontSize * 0.5) * mu);
+
+          // The below box is always matches how <span>s are positioned
+          /* ctx.strokeRect(info.fillTextOffsetX, info.fillTextOffsetY,
+            info.fillTextWidth, info.fillTextHeight); */
+
+          // Restore the state.
+          ctx.restore();
+        } else {
+          // drawText on DIV element
+          var span = document.createElement('span');
+          var transformRule = '';
+          transformRule = 'rotate(' + (- rotateDeg / Math.PI * 180) + 'deg) ';
+          if (info.mu !== 1) {
+            transformRule +=
+              'translateX(-' + (info.fillTextWidth / 4) + 'px) ' +
+              'scale(' + (1 / info.mu) + ')';
+          }
+          var styleRules = {
+            'position': 'absolute',
+            'display': 'block',
+            'font': settings.fontWeight + ' ' +
+                    (fontSize * info.mu) + 'px ' + settings.fontFamily,
+            'left': ((gx + info.gw / 2) * g + info.fillTextOffsetX) + 'px',
+            'top': ((gy + info.gh / 2) * g + info.fillTextOffsetY) + 'px',
+            'width': info.fillTextWidth + 'px',
+            'height': info.fillTextHeight + 'px',
+            'lineHeight': fontSize + 'px',
+            'whiteSpace': 'nowrap',
+            'transform': transformRule,
+            'webkitTransform': transformRule,
+            'msTransform': transformRule,
+            'transformOrigin': '50% 40%',
+            'webkitTransformOrigin': '50% 40%',
+            'msTransformOrigin': '50% 40%'
+          };
+          if (color) {
+            styleRules.color = color;
+          }
+          span.textContent = word;
+          for (var cssProp in styleRules) {
+            span.style[cssProp] = styleRules[cssProp];
+          }
+          if (attributes) {
+            for (var attribute in attributes) {
+              span.setAttribute(attribute, attributes[attribute]);
+            }
+          }
+          if (classes) {
+            span.className += classes;
+          }
+          el.appendChild(span);
+        }
+      });
+    };
+
+    /* Help function to updateGrid */
+    var fillGridAt = function fillGridAt(x, y, drawMask, dimension, item) {
+      if (x >= ngx || y >= ngy || x < 0 || y < 0) {
+        return;
+      }
+
+      grid[x][y] = false;
+
+      if (drawMask) {
+        var ctx = elements[0].getContext('2d');
+        ctx.fillRect(x * g, y * g, maskRectWidth, maskRectWidth);
+      }
+
+      if (interactive) {
+        infoGrid[x][y] = { item: item, dimension: dimension };
+      }
+    };
+
+    /* Update the filling information of the given space with occupied points.
+       Draw the mask on the canvas if necessary. */
+    var updateGrid = function updateGrid(gx, gy, gw, gh, info, item) {
+      var occupied = info.occupied;
+      var drawMask = settings.drawMask;
+      var ctx;
+      if (drawMask) {
+        ctx = elements[0].getContext('2d');
+        ctx.save();
+        ctx.fillStyle = settings.maskColor;
+      }
+
+      var dimension;
+      if (interactive) {
+        var bounds = info.bounds;
+        dimension = {
+          x: (gx + bounds[3]) * g,
+          y: (gy + bounds[0]) * g,
+          w: (bounds[1] - bounds[3] + 1) * g,
+          h: (bounds[2] - bounds[0] + 1) * g
+        };
+      }
+
+      var i = occupied.length;
+      while (i--) {
+        fillGridAt(gx + occupied[i][0], gy + occupied[i][1],
+                   drawMask, dimension, item);
+      }
+
+      if (drawMask) {
+        ctx.restore();
+      }
+    };
+
+    /* putWord() processes each item on the list,
+       calculate it's size and determine it's position, and actually
+       put it on the canvas. */
+    var putWord = function putWord(item) {
+      var word, weight, attributes;
+      if (Array.isArray(item)) {
+        word = item[0];
+        weight = item[1];
+      } else {
+        word = item.word;
+        weight = item.weight;
+        attributes = item.attributes;
+      }
+      var rotateDeg = getRotateDeg();
+
+      // get info needed to put the text onto the canvas
+      var info = getTextInfo(word, weight, rotateDeg);
+
+      // not getting the info means we shouldn't be drawing this one.
+      if (!info) {
+        return false;
+      }
+
+      if (exceedTime()) {
+        return false;
+      }
+
+      // Skip the loop if we have already know the bounding box of
+      // word is larger than the canvas.
+      var bounds = info.bounds;
+      if ((bounds[1] - bounds[3] + 1) > ngx ||
+        (bounds[2] - bounds[0] + 1) > ngy) {
+        return false;
+      }
+
+      // Determine the position to put the text by
+      // start looking for the nearest points
+      var r = maxRadius + 1;
+
+      var tryToPutWordAtPoint = function(gxy) {
+        var gx = Math.floor(gxy[0] - info.gw / 2);
+        var gy = Math.floor(gxy[1] - info.gh / 2);
+        var gw = info.gw;
+        var gh = info.gh;
+
+        // If we cannot fit the text at this position, return false
+        // and go to the next position.
+        if (!canFitText(gx, gy, gw, gh, info.occupied)) {
+          return false;
+        }
+
+        // Actually put the text on the canvas
+        drawText(gx, gy, info, word, weight,
+                 (maxRadius - r), gxy[2], rotateDeg, attributes);
+
+        // Mark the spaces on the grid as filled
+        updateGrid(gx, gy, gw, gh, info, item);
+
+        // Return true so some() will stop and also return true.
+        return true;
+      };
+
+      while (r--) {
+        var points = getPointsAtRadius(maxRadius - r);
+
+        if (settings.shuffle) {
+          points = [].concat(points);
+          shuffleArray(points);
+        }
+
+        // Try to fit the words by looking at each point.
+        // array.some() will stop and return true
+        // when putWordAtPoint() returns true.
+        // If all the points returns false, array.some() returns false.
+        var drawn = points.some(tryToPutWordAtPoint);
+
+        if (drawn) {
+          // leave putWord() and return true
+          return true;
+        }
+      }
+      // we tried all distances but text won't fit, return false
+      return false;
+    };
+
+    /* Send DOM event to all elements. Will stop sending event and return
+       if the previous one is canceled (for cancelable events). */
+    var sendEvent = function sendEvent(type, cancelable, detail) {
+      if (cancelable) {
+        return !elements.some(function(el) {
+          var evt = document.createEvent('CustomEvent');
+          evt.initCustomEvent(type, true, cancelable, detail || {});
+          return !el.dispatchEvent(evt);
+        }, this);
+      } else {
+        elements.forEach(function(el) {
+          var evt = document.createEvent('CustomEvent');
+          evt.initCustomEvent(type, true, cancelable, detail || {});
+          el.dispatchEvent(evt);
+        }, this);
+      }
+    };
+
+    /* Start drawing on a canvas */
+    var start = function start() {
+      // For dimensions, clearCanvas etc.,
+      // we only care about the first element.
+      var canvas = elements[0];
+
+      if (canvas.getContext) {
+        ngx = Math.floor(canvas.width / g);
+        ngy = Math.floor(canvas.height / g);
+      } else {
+        var rect = canvas.getBoundingClientRect();
+        ngx = Math.floor(rect.width / g);
+        ngy = Math.floor(rect.height / g);
+      }
+
+      // Sending a wordcloudstart event which cause the previous loop to stop.
+      // Do nothing if the event is canceled.
+      if (!sendEvent('wordcloudstart', true)) {
+        return;
+      }
+
+      // Determine the center of the word cloud
+      center = (settings.origin) ?
+        [settings.origin[0]/g, settings.origin[1]/g] :
+        [ngx / 2, ngy / 2];
+
+      // Maxium radius to look for space
+      maxRadius = Math.floor(Math.sqrt(ngx * ngx + ngy * ngy));
+
+      /* Clear the canvas only if the clearCanvas is set,
+         if not, update the grid to the current canvas state */
+      grid = [];
+
+      var gx, gy, i;
+      if (!canvas.getContext || settings.clearCanvas) {
+        elements.forEach(function(el) {
+          if (el.getContext) {
+            var ctx = el.getContext('2d');
+            ctx.fillStyle = settings.backgroundColor;
+            ctx.clearRect(0, 0, ngx * (g + 1), ngy * (g + 1));
+            ctx.fillRect(0, 0, ngx * (g + 1), ngy * (g + 1));
+          } else {
+            el.textContent = '';
+            el.style.backgroundColor = settings.backgroundColor;
+          }
+        });
+
+        /* fill the grid with empty state */
+        gx = ngx;
+        while (gx--) {
+          grid[gx] = [];
+          gy = ngy;
+          while (gy--) {
+            grid[gx][gy] = true;
+          }
+        }
+      } else {
+        /* Determine bgPixel by creating
+           another canvas and fill the specified background color. */
+        var bctx = document.createElement('canvas').getContext('2d');
+
+        bctx.fillStyle = settings.backgroundColor;
+        bctx.fillRect(0, 0, 1, 1);
+        var bgPixel = bctx.getImageData(0, 0, 1, 1).data;
+
+        /* Read back the pixels of the canvas we got to tell which part of the
+           canvas is empty.
+           (no clearCanvas only works with a canvas, not divs) */
+        var imageData =
+          canvas.getContext('2d').getImageData(0, 0, ngx * g, ngy * g).data;
+
+        gx = ngx;
+        var x, y;
+        while (gx--) {
+          grid[gx] = [];
+          gy = ngy;
+          while (gy--) {
+            y = g;
+            singleGridLoop: while (y--) {
+              x = g;
+              while (x--) {
+                i = 4;
+                while (i--) {
+                  if (imageData[((gy * g + y) * ngx * g +
+                                 (gx * g + x)) * 4 + i] !== bgPixel[i]) {
+                    grid[gx][gy] = false;
+                    break singleGridLoop;
+                  }
+                }
+              }
+            }
+            if (grid[gx][gy] !== false) {
+              grid[gx][gy] = true;
+            }
+          }
+        }
+
+        imageData = bctx = bgPixel = undefined;
+      }
+
+      // fill the infoGrid with empty state if we need it
+      if (settings.hover || settings.click) {
+
+        interactive = true;
+
+        /* fill the grid with empty state */
+        gx = ngx + 1;
+        while (gx--) {
+          infoGrid[gx] = [];
+        }
+
+        if (settings.hover) {
+          canvas.addEventListener('mousemove', wordcloudhover);
+        }
+
+        if (settings.click) {
+          canvas.addEventListener('click', wordcloudclick);
+          canvas.addEventListener('touchstart', wordcloudclick);
+          canvas.addEventListener('touchend', function (e) {
+            e.preventDefault();
+          });
+          canvas.style.webkitTapHighlightColor = 'rgba(0, 0, 0, 0)';
+        }
+
+        canvas.addEventListener('wordcloudstart', function stopInteraction() {
+          canvas.removeEventListener('wordcloudstart', stopInteraction);
+
+          canvas.removeEventListener('mousemove', wordcloudhover);
+          canvas.removeEventListener('click', wordcloudclick);
+          hovered = undefined;
+        });
+      }
+
+      i = 0;
+      var loopingFunction, stoppingFunction;
+      if (settings.wait !== 0) {
+        loopingFunction = window.setTimeout;
+        stoppingFunction = window.clearTimeout;
+      } else {
+        loopingFunction = window.setImmediate;
+        stoppingFunction = window.clearImmediate;
+      }
+
+      var addEventListener = function addEventListener(type, listener) {
+        elements.forEach(function(el) {
+          el.addEventListener(type, listener);
+        }, this);
+      };
+
+      var removeEventListener = function removeEventListener(type, listener) {
+        elements.forEach(function(el) {
+          el.removeEventListener(type, listener);
+        }, this);
+      };
+
+      var anotherWordCloudStart = function anotherWordCloudStart() {
+        removeEventListener('wordcloudstart', anotherWordCloudStart);
+        stoppingFunction(timer);
+      };
+
+      addEventListener('wordcloudstart', anotherWordCloudStart);
+
+      var timer = loopingFunction(function loop() {
+        if (i >= settings.list.length) {
+          stoppingFunction(timer);
+          sendEvent('wordcloudstop', false);
+          removeEventListener('wordcloudstart', anotherWordCloudStart);
+
+          return;
+        }
+        escapeTime = (new Date()).getTime();
+        var drawn = putWord(settings.list[i]);
+        var canceled = !sendEvent('wordclouddrawn', true, {
+          item: settings.list[i], drawn: drawn });
+        if (exceedTime() || canceled) {
+          stoppingFunction(timer);
+          settings.abort();
+          sendEvent('wordcloudabort', false);
+          sendEvent('wordcloudstop', false);
+          removeEventListener('wordcloudstart', anotherWordCloudStart);
+          return;
+        }
+        i++;
+        timer = loopingFunction(loop, settings.wait);
+      }, settings.wait);
+    };
+
+    // All set, start the drawing
+    start();
+  };
+
+  WordCloud.isSupported = isSupported;
+  WordCloud.minFontSize = minFontSize;
+
+  // Expose the library as an AMD module
+  if (typeof define === 'function' && define.amd) {
+    define('wordcloud', [], function() { return WordCloud; });
+  } else if (typeof module !== 'undefined' && module.exports) {
+    module.exports = WordCloud;
+  } else {
+    global.WordCloud = WordCloud;
+  }
+
+})(this); //jshint ignore:line
+</script>
+<script>// create element
+function newlabel(el){
+  var newDiv = document.createElement("div");
+  var newSpan = document.createElement("span");
+  newDiv.id = 'wcLabel';
+  newSpan.id = "wcSpan";
+  el.appendChild(newDiv);
+  document.getElementById("wcLabel").appendChild(newSpan);
+}
+
+// hover function
+function cv_handleHover(item, dimension, evt) {
+  var el = document.getElementById("wcLabel");
+  if (!item) {
+    el.setAttribute('hidden', true);
+
+    return;
+  }
+
+  el.removeAttribute('hidden');
+  // console.log(evt.srcElement.offsetLeft);
+
+  el.style.left = dimension.x + evt.srcElement.offsetLeft + 'px';
+  el.style.top = dimension.y + evt.srcElement.offsetTop + 'px';
+  el.style.width = dimension.w + 'px';
+  el.style.height = dimension.h + 'px';
+
+  this.hoverDimension = dimension;
+
+  document.getElementById("wcSpan").setAttribute(
+    'data-l10n-args', JSON.stringify({ word: item[0], count: item[1] }));
+  document.getElementById("wcSpan").innerHTML =item[0]+":" + item[1];
+
+}
+
+function updateCanvasMask(maskCanvas) {
+    var ctx = maskCanvas.getContext('2d');
+    var imageData = ctx.getImageData(
+        0, 0, maskCanvas.width, maskCanvas.height);
+    var newImageData = ctx.createImageData(imageData);
+
+    var toneSum = 0;
+    var toneCnt = 0;
+    for (var i = 0; i < imageData.data.length; i += 4) {
+        var alpha = imageData.data[i + 3];
+        if (alpha > 128) {
+            var tone = imageData.data[i]
+                + imageData.data[i + 1]
+                + imageData.data[i + 2];
+            toneSum += tone;
+            ++toneCnt;
+        }
+    }
+    var threshold = toneSum / toneCnt;
+
+    for (var i = 0; i < imageData.data.length; i += 4) {
+        var tone = imageData.data[i]
+            + imageData.data[i + 1]
+            + imageData.data[i + 2];
+        var alpha = imageData.data[i + 3];
+
+        if (alpha < 128 || tone > threshold) {
+            // Area not to draw
+            newImageData.data[i] = 0;
+            newImageData.data[i + 1] = 0;
+            newImageData.data[i + 2] = 0;
+            newImageData.data[i + 3] = 0;
+        }
+        else {
+            // Area to draw
+            // The color must be same with backgroundColor
+            newImageData.data[i] = 255;
+            newImageData.data[i + 1] = 255;
+            newImageData.data[i + 2] = 255;
+            newImageData.data[i + 3] = 255;
+        }
+    }
+
+    ctx.putImageData(newImageData, 0, 0);
+    console.log(maskCanvas.toDataURL());
+}
+
+
+
+//mask function
+function maskInit(el,x){
+  console.log(1)
+  str = x.figBase64;
+  //console.log(str)
+  var newImg = new Image();
+  newImg.src = str;
+  newImg.style.position = 'absolute';
+  newImg.style.left = 0;
+  // console.log(el.clientHeight);
+  newImg.width = el.clientWidth;
+  newImg.height = el.clientHeight;
+  // maskCanvas = init(el, x, newImg);
+  vvalue = 128
+
+  ctx = el.firstChild.getContext('2d');
+
+                ctx.drawImage(newImg, 0, 0, canvas.width, canvas.height);
+                updateCanvasMask(ctx);
+
+
+
+
+
+            WordCloud(el.firstChild, { list: listData,
+                  fontFamily: x.fontFamily,
+                  fontWeight: x.fontWeight,
+                  color: x.color,
+                  minSize: x.minSize,
+                  weightFactor: x.weightFactor,
+                  backgroundColor: x.backgroundColor,
+                  gridSize: x.gridSize,
+                  minRotation: x.minRotation,
+                  maxRotation: x.maxRotation,
+                  shuffle: x.shuffle,
+                  shape: x.shape,
+                  rotateRatio: x.rotateRatio,
+                  ellipticity: x.ellipticity,
+                  clearCanvas: false,
+                  drawMask: true,
+                  hover: x.hover || cv_handleHover,
+                  abortThreshold: 3000
+                  });
+}
+
+</script>
+<script>HTMLWidgets.widget({
+
+  name: 'wordcloud2',
+
+  type: 'output',
+
+  initialize: function(el, width, height) {
+    var newCanvas = document.createElement("canvas");
+    newCanvas.height = height;
+    newCanvas.width = width;
+    newCanvas.id = "canvas";
+
+    el.appendChild(newCanvas);
+    newlabel(el);
+    return(el.firstChild);
+  },
+  renderValue: function(el, x, instance) {
+  // parse gexf data
+        listData=[];
+        for(var i=0; i<x.word.length; i++){
+          listData.push([x.word[i], x.freq[i]]);
+        }
+     if(x.figBase64){
+
+        maskInit(el,x);
+        console.log(3)
+
+      }else{
+        WordCloud(el.firstChild, { list: listData,
+                        fontFamily: x.fontFamily,
+                        fontWeight: x.fontWeight,
+                        color: x.color,
+                        minSize: x.minSize,
+                        weightFactor: x.weightFactor,
+                        backgroundColor: x.backgroundColor,
+                        gridSize: x.gridSize,
+                        minRotation: x.minRotation,
+                        maxRotation: x.maxRotation,
+                        shuffle: x.shuffle,
+                        shape: x.shape,
+                        rotateRatio: x.rotateRatio,
+                        ellipticity: x.ellipticity,
+                        drawMask: x.drawMask,
+                        maskColor: x.maskColor,
+                        maskGapWidth: x.maskGapWidth,
+                        hover: x.hover || cv_handleHover
+                        });
+      }
+    },
+      resize: function(el, width, height) {
+      }
+
+});
+</script>
+
+</head>
+<body style="background-color: white;">
+<div id="htmlwidget_container">
+  <div class="wordcloud2 html-widget html-fill-item" id="htmlwidget-0da6b19313ded17e4a12" style="width:960px;height:500px;"></div>
+</div>
+<script type="application/json" data-for="htmlwidget-0da6b19313ded17e4a12">{"x":{"word":["ஒரு","நான்","என","போல","என்","உன்","நீ","இன்னும்","எனது","அந்த","இல்லை","எனக்கு","என்ன","என்று","இப்போது","ஏதோ","ஒவ்வொரு","பின்","வந்து","அதன்","உனது","என்னை","ஓர்","பார்","வெளியே","அவை","இரு","இருக்கிறது","இருக்கிறேன்","கொண்டிருக்கிறது","தெரியவில்லை","மட்டும்","யாவும்","ஆனால்","இங்கு","இந்த","இனி","இன்னொரு","எனக்குத்","கூட","தன்","பிறகு","அண்ணாந்து","அது","அவ்வளவு","இது","எழுந்து","என்னைப்","சில","தொலைவு","பின்பு","மீண்டும்","முதலில்","யார்","வீடு","வீடுகள்","வேறு","அங்கே","அத்தனை","அலைகள்","அறியேன்","ஆனாலும்","இரண்டு","இருக்கிறீர்களா","உன்னை","எத்தனை","எந்த","எவ்வளவு","என்பதுபோல","என்ற","ஏன்","ஒருவன்","ஒருவேளை","ஒரே","கடந்து","காற்று","சட்டென்று","சற்றே","சாரங்கி","துக்கம்","நின்று","பக்கத்தில்","பாடல்","பெயர்","போதும்","போலிருக்கிறது","மறுபடியும்","மெதுவாக","மெல்ல","மேலே","அதனுள்","அதில்","அந்தக்","அப்போதுதான்","அமர்ந்து","அமைதி","அல்லது","அவள்","அவன்","அறைக்குள்","ஆ","இப்போதோ","இருக்கவேண்டும்","இருப்பது","இருவரும்","இருள்","இளஞ்சிவப்பு","உட்கார்ந்து","உலகம்","உள்ளே","எங்கே","எது","எதையோ","எனக்குக்","எனக்குச்","எனக்குப்","என்னால்","என்னைக்","ஒருவர்","ஒர்","ஒளி","ஒன்று","கடற்கரையில்","கணம்","கண்","கவனமாக","காசநோயே","கீழே","கொஞ்ச","கொண்டிருந்தேன்","சட்டென","சதவீதம்","சப்தம்","சரி","சன்னல்","சிறிய","சொல்ல","தான்","தூரம்","தொட்டதெல்லாம்","நடந்து","நானும்","நிற்கிறது","நிற்கிறேன்","நீங்கள்","நீல","பதினைந்து","பார்க்கிறேன்","பார்த்து","பெரிய","போ","மகத்தான","மரங்கள்","மனிதர்கள்","மாதவி","மாலை","முகங்கள்","முதல்","முறை","மொட்டைமாடியில்","மொத்தமாய்","வாள்","விழுந்து","வீட்டை","வீதியில்","வெறுமனே","வேண்டும்","அங்கு","அடர்ந்து","அதனூடே","அதோ","அத்தனையும்","அநேகமாக","அந்தப்","அந்தி","அப்போது","அமர்கிறேன்","அமர்ந்திருக்கிறது","அமைதியாக","அலையும்","அல்லவா","அவருக்கு","அவரை","அறைந்து","அற்புதம்","அனுப்பி","அனைத்தும்","அஸ்தமனம்","ஆசை","ஆதலால்","ஆழமாக","ஆளாக","ஆள்","ஆனந்த","ஆனந்தம்","இதுதான்","இதுவரை","இதே","இதோ","இத்தனையும்","இந்தக்","இந்தப்","இம்முறை","இரண்டாவது","இருக்க","இருக்கிறாய்","இருக்கின்றன","இருண்ட","இருந்தால்","இருளில்","இலை","இலைக்கு","இவை","இழுக்க","இறங்கி","இன்று","இன்றைப்","இன்னொருவர்","இன்னொன்று","உண்டு","உண்டென்றும்","உயரத்திலிருந்து","உயரத்தில்","உலகையும்","உள்ளிழுத்து","உனக்கு","உனக்கும்","உன்னால்தான்","உன்னிடம்","உன்னைப்","எடு","எட்ட","எண்ணி","எதற்காக","எதுவும்","எந்நேரமும்","எப்படி","எழுதப்படாத","எனவும்","எனவே","எனினும்","என்றே","என்னதான்","என்னவோ","என்னிடம்","என்னுடயது","என்னுடைய","என்னுடையது","ஏனென்றே","ஒட்டுமொத்த","ஒரிடத்தில்","ஒருபோதும்","ஒற்றை","ஓடிக்கொண்டிருக்கிறது","ஓராயிரம்","கடல்","கடற்கரை","கடற்கரைகள்","கடற்கரையிலிருந்து","கண்டு","கரை","கரைந்து","கன்னத்தில்","காகம்","காகிதம்","காணாமல்","கால்களை","காற்றில்","கிடக்கிறது","குரல்","கேட்க","கைகளை","கையால்","கொஞ்சநேரத்தில்","கொஞ்சம்","கொண்ட","கோடிக்கணக்காண","சட்டெனப்","சந்திப்பு","சரியாக","சற்று","சன்னலுக்குள்","சிலர்","சில்லுச்சில்லாக","சுருண்டு","சுவிட்ச்","சூர்யா","செல்கிறேன்","செல்கின்றன","செல்லும்","செல்வேனா","சென்று","டிசம்பர்","தங்களைத்","தண்ணீர்","தரையில்","தலையை","தவறி","தன்னந்தனியாக","தன்னை","தாங்களே","தானே","திடுமென","தியான","திரண்டு","திரும்பி","தூரத்தில்","தூரிகை","தெய்வங்கள்","தெரியாமல்","தெரியும்","தொலைவில்","நடக்கிறேன்","நட்சத்திர","நட்சத்திரங்கள்","நண்பர்களே","நலமா","நன்றாக","நன்று","நாய்கள்","நிமிடங்கள்","நிழல்","நிறங்கள்","நிற்கும்","நினைத்து","நூறு","நெரிசலையும்","நெரிசல்","படிக்கட்டில்","படிக்கட்டுகளில்","பரிசிக்க","பறக்கப்","பறந்து","பாதை","பாருங்களேன்","பாரேன்","பார்க்கும்தோறும்","பார்த்தேன்","பார்ப்பது","பார்ப்பேன்","பின்னர்","புதிர்","புது","பூச்சிகள்","பேரும்","பொழுதுகள்","போகிறேன்","போயிற்று","போலவே","போல்","போற்றுவோம்","மட்டுமே","மண்ணில்","மலைகள்","மனம்","மாத்திரை","மாயக்கதவு","மாலைப்பொழுது","மிக","மியாவ்","மின்கம்பியில்","மின்மினிகள்","மின்னல்","மீது","முடியவில்லை","முடியும்","முன்பு","மூச்சினை","மூன்று","மேகங்களே","மேலும்","மேல்","மொழியில்","யாராவது","யாரோ","வது","வரலாமா","வரை","வழியில்","வாகனக்","வாசிக்க","வாரி","வானத்தை","வானில்","விசும்பில்","விழுந்த","விஷயம்","வெறுமை","வேறெங்கேயோ","வைக்கும்","வைத்துக்கொள்","அகத்துடனும்","அகப்படுகிறதோ","அக்னிநட்சத்திர","அங்கிருக்கும்","அங்கிருந்து","அங்கிருந்தெல்லாம்","அங்கும்","அங்கேயும்","அங்கேயே","அங்கொன்று","அசலாய்","அசைக்கின்றன","அசைத்தேன்","அசையாதே","அசைவிழக்கிறான்","அசைவின்மை","அச்சத்துடன்","அச்சாலையின்","அச்சு","அஞ்சவேண்டியதில்லை","அடர்த்தியான","அடிக்கடி","அடித்தால்","அடியோடு","அடிவாரத்திலிருக்கும்","அடிவாரமே","அடுக்கிவைக்கிறேன்","அடுத்த","அடுத்தடுத்த","அடுத்தது","அடுத்தப்","அட்டைகள்","அணிந்தபடி","அணிந்தும்","அணில்","அண்ட","அதற்குத்","அதனாலென்ன","அதனால்","அதனிடை","அதனினும்","அதன்பிறகு","அதிர்ச்சியின்","அதிலொரு","அதிலொன்றில்","அதுவுமிந்த","அதுவும்","அதுவே","அதுவோ","அதேயிடத்திற்கு","அதை","அதைக்","அதைத்தான்","அதையெடுத்து","அநேகம்","அந்தத்","அந்தரக்","அந்தரத்திலிருந்தபடியே","அந்திக்கருக்கலில்","அந்திப்பொழுதும்","அந்திவானில்","அந்நதியை","அந்நிழலுக்குப்","அப்படி","அப்படியொன்று","அப்பாலையில்","அப்புறம்","அப்போதெல்லாம்","அமர","அமர்கிறார்கள்","அமர்கின்றன","அமர்ந்திருக்கும்","அமர்ந்திருந்தேன்","அமர்வதும்","அமர்வு","அமிழ்ந்துகொண்டிருக்கிறான்","அமுதென","அமைந்திருக்கும்","அம்பரத்தில்","அம்மாவின்","அயர்ந்திருக்கிறது","அயர்ந்திருக்கிறான்","அரவற்ற","அருகருகே","அருகாமையில்","அருகாமையின்","அருகாமையை","அருகிலிருப்பவனாகவும்","அருந்த","அர்த்தம்","அலங்கரிக்கும்","அலட்சியப்படுத்து","அலற","அலுத்துவிட்டது","அலுவலகம்","அலைகளாலும்","அலைகளின்","அலைகளுக்கு","அலைகளுக்கும்","அலைகளை","அலைகளையும்","அலைந்து","அலைபேசியில்","அலைமோதும்","அலையை","அல்ல","அவசியமில்லையாம்","அவரோ","அவர்களிடையே","அவர்களிருவரும்","அவர்களில்","அவர்களைத்","அவர்கள்","அவற்றை","அவற்றைக்","அவற்றைத்","அவனிடம்","அவனுக்கு","அவனுக்குள்","அவனை","அவனையும்","அவ்வப்போது","அவ்வளவுதானா","அவ்வானம்தான்","அழகின்","அழற்கதிரெனும்","அழித்துக்கொள்ள","அழுகிறேன்","அழுதவாறும்","அழுந்தத்","அழைக்கிறது","அழைக்கிறார்","அழைத்துக்கொண்டிருக்க","அழைத்தேன்","அழைப்பதில்லை","அழைப்பு","அளவு","அளவுக்கு","அளிப்பவை","அள்ளியெடுக்கிறேன்","அள்ளுகின்றேனோ","அறிகுறிகளை","அறிமுகம்","அறிய","அறியமுடியாத","அறியவொண்ணாமையே","அறியாமல்","அறிவிக்கும்","அறிவியலாத","அறுதியிட்டுச்","அறுபடாத்","அறுபது","அறையிலிருப்பவர்களை","அறையில்","அற்ப","அனாயாசமாய்","அனிச்சையாக","அனுப்புகின்றன","அனைத்தையும்","அன்னையின்","அஸ்தமன","அஸ்தமனச்","அஸ்தமனத்திற்குப்","அஸ்தமனத்தின்","அஸ்தமனமாகிக்","ஆகப்","ஆகாசத்தில்","ஆகாசம்","ஆகிவிடுகிறது","ஆகிவிடுகின்றன","ஆகும்","ஆக்கிவிடாதே","ஆக்கிவிடுவாய்","ஆக்ரோஷமாக","ஆங்காங்கே","ஆங்காரத்தில்","ஆங்கே","ஆசையாய்","ஆடுகிறது","ஆடும்","ஆட்டமிழக்கச்","ஆட்டுக்குட்டி","ஆட்டோக்கள்","ஆயிரக்கணக்கான","ஆயினும்","ஆயுதங்களாக","ஆர","ஆர்ப்பரித்தன","ஆர்வம்","ஆழத்திலிருக்கும்","ஆழப்","ஆழ்கடல்","ஆளாகவா","ஆளாகி","ஆளில்லாமல்","ஆறாத","ஆன","ஆனந்தத்திலும்","ஆனந்தத்தில்","ஆனந்தத்தின்","ஆன்மாவின்","இங்கிதமே","இங்கிருந்து","இங்கும்","இங்கே","இங்கேப்","இங்கேயும்","இங்கொன்று","இசையை","இச்சுவர்","இச்சையிலும்","இடங்களை","இடது","இடத்திலும்","இடித்துக்கொள்ளும்","இடித்துத்","இடு","இடையே","இட்டு","இட்டுச்சென்ற","இதில்","இதை","இதோடு","இத்தகைய","இத்தருணம்","இத்தனை","இந்தச்","இந்தத்","இந்நகரின்","இந்நாட்களில்","இந்நாள்","இப்படி","இப்படித்தான்","இப்படியே","இப்படியொருவர்","இப்பரந்த","இப்பிரபஞ்சத்துக்கு","இப்பொருள்வெளியா","இப்பொழுது","இப்போதுதான்","இப்போதும்","இப்போதெல்லாம்","இமைகளை","இம்மலரினுள்","இயங்காதென்று","இயந்திரத்தில்","இயலாதோ","இயலாமல்","இயலுமா","இயலுமோ","இயலும்","இயல்கிறது","இயற்கையின்","இயன்றால்","இரங்கற்","இரங்கற்பாடலென","இரண்டுமே","இரவு","இரவுபகலற்ற","இருக்கட்டுமே","இருக்கலாம்","இருக்கவே","இருக்கிறதே","இருக்கிறாயோ","இருக்கிறார்","இருக்குமெனத்","இருக்கும்","இருக்கை","இருக்கைகளின்","இருக்கையின்மீது","இருசக்கர","இருட்டிவிட்டதைப்","இருந்த","இருந்ததே","இருந்தனர்","இருந்தாலும்","இருந்திருக்க","இருந்திருக்கக்","இருந்து","இருந்தும்","இருப்பதைக்","இருப்பவன்","இருப்பீர்கள்","இருப்பேனோ","இருமருங்கிலும்","இருமல்","இருமிக்கொண்டே","இருவருமே","இருவர்","இருளே","இலைகளிருக்கின்றன","இலைகளையும்","இலைத்","இலைமறைவில்","இலையும்","இல்லவே","இல்லாது","இல்லாமலிருப்பது","இல்லாமல்","இல்லையோ","இவற்றிலிருந்து","இவற்றைப்","இவ்வளவையும்","இவ்வீதியே","இழுத்துச்","இளம்","இளவரசியே","இறங்கிச்","இறங்கிவரும்","இறந்தவர்களால்","இறந்தவர்களின்","இறந்தவர்கள்","இறந்துகொண்டிருக்கிறாய்","இறுகப்","இறுக்கமாக்கியிருக்கிறாய்","இறுதியில்","இறைப்பது","இறைவனைத்","இனிதான்","இனிமேல்தான்","இன்ப","இன்மை","இன்மையின்","இன்மையை","இன்றிலேறி","இன்றினை","இன்றை","இன்றைக்கு","இன்னொருவரைத்","இன்னொருவன்","ஈர","ஈரமணலில்","ஈரமாக","ஈரம்","ஈற்றில்","ஈஸ்டர்","உங்களுக்கு","உங்களுக்குத்","உங்களையும்","உங்கள்","உச்சிக்கிளையிலிருந்தபடி","உடலென்றே","உடல்","உடன்படிக்கையை","உடன்பாடு","உடுத்தொகுதி","உடைகள்","உடைந்த","உடையிலிருந்து","உடையில்","உட்கார","உட்கார்","உட்கார்ந்திருக்கிறார்கள்","உட்கார்ந்தேன்","உட்கார்வதுமாக","உணர்கையில்","உண்கின்றனர்","உண்மை","உண்மையிலேயே","உண்மையில்","உண்மையும்","உண்மையைக்","உதடுகளை","உதட்டில்","உதட்டுச்சாயத்தால்","உதயம்","உதரக்கொதிதான்","உதவியின்றி","உப்புக்காற்றின்","உயர்த்திப்பிடித்தபடி","உயிரெழுத்துக்களை","உரசிக்கொள்கின்றன","உரிமையாளர்","உருட்டி","உருமாறிவிட்டிருக்கிறேன்","உருவில்","உலகத்","உலகத்திலிருக்கும்","உலகத்திலிருந்து","உலகத்தில்","உலகமன்றி","உலகமெங்கும்","உலவவிட்டுச்","உலுக்கவேண்டுமென்று","உலோகக்","உளைச்சல்களாலும்","உள்ள","உள்ளங்கையை","உள்ளடக்கிய","உள்ளது","உள்ளதைப்","உள்ளபோது","உள்ளன","உள்ளும்","உறங்கிக்கொண்டிருந்தது","உறங்கியபடி","உறங்குதல்","உறங்கும்","உறிஞ்சக்கூடத்","உறை","உறைந்தவர்கள்","உறைய","உற்றுப்பார்க்கிறேன்","உற்றுப்பார்த்தபடியும்","உனக்குக்","உனக்குத்தான்","உனக்குப்","உனக்கோ","ஊகிக்கவேயிலாத","ஊஞ்சல்","ஊடுருவட்டுமே","ஊடுருவிக்","ஊட்டிய","ஊருக்குத்","ஊருக்குள்","ஊர்ந்து","ஊர்வலம்","ஊழி","ஊளையிட்டுக்கொண்டிருக்கிறது","ஊற்று","ஊற்றும்","எகிறிக்குதி","எங்களை","எங்கிருக்கிறாயோ","எங்கிருக்கிறோம்","எங்கெல்லாம்","எங்கேயென்று","எங்கேயோ","எச்சில்","எஞ்சியிருந்தால்","எஞ்சும்","எடுக்கப்படும்","எடுத்துக்கொண்டு","எடுத்துக்கொண்டே","எடுப்பார்","எடை","எட்டாத","எட்டாதபடி","எட்டாத்","எட்டாமல்","எட்டாவது","எட்டுப்பொழுதுகளாக","எட்டும்","எண்","எண்ணத்திற்காகப்","எண்ணத்தொடங்குகிறான்","எண்ணற்ற","எண்ணிக்கையளவுக்கான","எண்ணிக்கொள்கிறேன்","எண்ணியவாறு","எண்ணிலாச்","எண்ணிறந்த","எண்ணுபவன்","எண்ணெய்ப்","எதனாலும்","எதனிடமுமில்லை","எதிரில்","எதிர்கொள்ள","எதிர்பார்த்தபடி","எதிர்பார்த்து","எதிர்புறத்தில்","எதிர்ப்படும்","எதிர்ப்பு","எதுவுமே","எதை","எதையும்","எத்தனையோ","எந்தக்","எந்தச்","எப்படிச்","எப்படித்","எப்படியெப்படியெல்லாம்","எப்போது","எப்போதும்","எரிகற்கள்","எரிநட்சத்திரங்கள்","எரிமலைகள்","எலுமிச்சைகள்","எல்லாப்","எல்லாமே","எல்லாவற்றுக்கும்","எல்லாவற்றையும்","எல்லையற்ற","எல்லையில்","எல்லையுண்டு","எவருடைய","எவரும்","எவரென்று","எழுகிறது","எழுதப்படுகிறேன்","எழுதவருகிறதே","எழுதி","எழுதிக்கொண்டிருக்கிறார்","எழுதியிருக்கிறது","எழுதுவார்","எழுத்துப்பிழைகளோடு","எழுத்துருவாக்கி","எழுத்தே","எழுத்தையும்","எழுப்பி","எழுப்புகிறேன்","எறிகிறேன்","எறிந்துவிடாதே","எறிந்துவிடு","எறும்பை","எனக்","எனக்காகக்","எனக்கும்","எனக்குள்","எனக்கோ","எனச்","எனத்","எனில்","எனும்படிக்கு","என்கிறது","என்கிறாய்","என்கிறார்கள்","என்கின்றன","என்பதுகூட","என்பதையே","என்றல்லவா","என்றாகச்","என்றாகிவிட்டது","என்றாக்கித்","என்றாயே","என்றானதும்","என்றும்","என்றென்றைக்கும்","என்னில்","என்னுடன்","என்னுடையதில்லை","என்னைச்","என்னையே","ஏகம்","ஏங்குவது","ஏதென்று","ஏதோவொன்று","ஏந்தியபடி","ஏந்தியிருக்கும்","ஏராளமாகவா","ஏழெட்டுமுறை","ஏறக்குறைய","ஏறிநிற்கிறது","ஏறிநிற்கிறேன்","ஏறியிறங்கிவிட்டு","ஏறு","ஏற்கனவே","ஏற்றுவிட்டால்","ஏனோ","ஐந்தாவது","ஒட்டுமொத்தமாகக்","ஒதுங்கியிருப்பனவற்றைப்","ஒத்திப்போடுகிறேன்","ஒருகணம்","ஒருத்தி","ஒருமுறை","ஒருவரால்","ஒருவரை","ஒருவரைக்","ஒருவரையொருவர்","ஒருவனால்","ஒரேயொரு","ஒலிகளாலும்","ஒலிக்கவிடுகிறேன்","ஒலித்தொடரே","ஒலியெழுப்பும்","ஒவ்வொருமுறை","ஒவ்வொன்றயும்","ஒவ்வொன்றாகத்","ஒவ்வொன்றிற்காகவும்","ஒவ்வொன்றும்","ஒழுங்குபடுத்தியவாறு","ஒளித்துகள்களைத்தான்","ஒளித்துவைக்கிறாய்","ஒளிந்து","ஒளிப்பரிவாரங்களோடு","ஒளியின்","ஒளிரும்","ஒன்றாக","ஒன்றாம்","ஒன்றிற்கு","ஒன்றினுள்","ஒன்றுமட்டும்","ஒன்றுமில்லையோ","ஒன்றுவிடாமல்","ஒன்றை","ஓடிப்போய்","ஓடிய","ஓடிவிட்டன","ஓயாத","ஓரிரு","ஓளிமயிலென","ஃபெயில்","கசங்கிய","கச்சேரிகள்","கடக்கிறது","கடலெங்கும்","கடலோர","கடற்கரைகளில்","கடற்கரைகளைக்","கடற்கரைக்கு","கடற்கரையை","கடற்கரையோரத்திலே","கடித","கடிதம்","கடைசி","கடைசிப்","கடைசியில்","கட்டக்கடைசியான","கட்டடங்கள்","கட்டடம்போல","கட்டிடத்தை","கட்டியணைத்துக்கொள்கிறேன்","கட்டியணைத்துக்கொள்ளும்போது","கட்டிவைக்கப்பட்டிருக்கும்","கட்டுத்துணியென","கணக்கு","கணத்திடம்","கணத்தில்","கண்களுக்கு","கண்களும்","கண்களோடு","கண்காணா","கண்காணிப்புக்","கண்டதுங்கடியதும்","கண்டவர்","கண்டவர்களெல்லாம்","கண்டுபிடிக்கிறேன்","கண்டுபிடிப்பான்","கண்ணாடி","கண்ணாடிக்","கண்ணாடிக்குவளை","கண்ணாடியைக்","கண்ணீரை","கண்ணீர்த்துளிகள்","கண்ணூன்றிக்","கண்விழித்து","கதவினூடாகச்","கதவு","கதவுக்குபின்","கதவைத்","கதை","கதையின்","கப்பற்சேதங்கள்","கரங்களைக்","கரங்களையே","கரடுமுரடான","கரத்தினால்","கருணையா","கருணையை","கருநீல","கருநீலத்திற்குள்","கரும்பலகைகள்","கரைந்தபடியே","கரையை","கரையொதுங்க","கலங்கரைவிளக்கங்கள்","கலப்படமற்ற","கலப்படமாகியிருக்கின்றது","கல்","கவசமற்ற","கவனிக்கக்","கவிந்தாலும்","கழற்றி","கழற்றிவிட்டிருக்கிறாய்","கழியும்","கழுகுக்","கழுத்துகளுக்கு","கழுத்தைப்","களைத்துப்போய்","களைத்துப்போய்ப்","களைந்து","கறுப்புக்","கறுப்புக்காகிதம்","கறுப்புப்","கற்களுக்கு","கற்பனாவாத","கற்பனை","கனவில்","கனவு","கனவேதான்","கனவைக்","கனி","கனியிடமே","கன்னியாகுமரியில்","கஷ்டமாக","காகங்கள்","காகிதத்தில்","காசநோய்க்கு","காட்சிகளின்","காட்சிப்படுத்திக்","காட்சியைப்","காட்டி","காட்டியவாறு","காணயிருந்த","காணலாம்","காண்கிறது","காண்கிறேன்","காண்பது","காண்பான்","காதலர்கள்","காதல்","காது","காத்திருக்கிறது","காத்திருந்தேன்","காப்பகத்தில்","காப்பகம்","காயங்களுடன்","காயத்தைத்","காய்ச்சல்","காரணத்திற்காக","காரணமில்லா","கார்மேகக்","காலங்கள்","காலடிகள்","காலடிச்சுவடுகளே","காலடிச்சுவடுகளை","காலம்","காலாற","காலை","காலையிலும்","காலையில்","கால்","காவலர்","காளைகள்","காற்புள்ளி","காற்றடித்தால்","காற்றின்","காற்றுக்கும்","காற்றுப்பைக்கு","காற்றைத்","கான்கீரீட்","கிடக்கிறோம்","கிடக்கின்றன","கிடக்கும்","கிடைத்துவிட்டது","கிடைத்துவிட்டதே","கிடையாதா","கிணற்றிலிருந்து","கிணிகளை","கிண்","கிராமத்தில்","கிரிக்கெட்","கிருமிகள்","கிழித்து","கிளைகள்","கிளையிலிருந்து","கிறுகிறுப்பில்","கிறுகிறுப்பு","கீழறையில்","கீழிருந்த","கீழுள்ளதுக்கும்","கீழேயும்","கீழ்","கீற்றினால்","கீற்று","குஞ்சே","குட்டியூண்டு","குணப்படுத்தும்","குணமாகிவிட்டதைப்","குண்டூசி","குதிரையேறி","கும்பலாய்","கும்பலுக்கு","குரலில்","குருதியின்","குவளை","குவித்து","குழந்தைகளாகக்","குழந்தையே","குழந்தையைப்","குளிர்பதனபெட்டியினுள்","குளிர்பொறுக்காமல்","குறித்து","குறையுமில்லை","குறைவேயில்லை","கூச்சத்தில்","கூடாது","கூடுகளுக்கு","கூடுகிறது","கூடுவது","கூட்டம்","கூட்டிச்","கூரையாகவும்","கூரையை","கூவியபடி","கூவியிருக்கிறாய்","கூவிவிடுகிறேன்","கூழாங்கல்லினைக்","கூறக்கூடும்","கேட்காதே","கேட்கிறது","கேட்டுக்கொண்டிருக்கும்","கேள்வியைப்","கை","கைகுலுக்கி","கைங்கரியம்தானா","கைப்பிடியாகக்","கைமீறிப்","கையில்","கையில்தான்","கையெழுத்தில்","கைவசமிருக்கும்","கைவிடப்பட்டது","கைவிளக்காக","கைவைத்தபடி","கொஞ்சமாய்க்","கொடிகளில்","கொடியில்","கொடுக்கப்படாத","கொடுத்துப்","கொண்டது","கொண்டாட்டம்","கொண்டிருக்க","கொண்டிருக்கிறார்கள்","கொண்டிருக்கிறான்","கொண்டிருக்கிறோம்","கொண்டிருக்கின்றன","கொண்டிருக்கின்றேனே","கொண்டேயிருக்கிறாள்","கொய்யாக்கனியைக்","கொள்கிறேன்","கொள்ள","கொள்ளட்டுமா","கொள்ளும்","கொறிக்கிறது","கொறிப்பு","கோடிட்ட","கோடிழுத்து","கோபுரங்கள்","கோப்பையினுள்","கோர்த்திருக்கிறது","கோர்த்துக்கொள்கின்றன","கோஷம்","சகலத்தையும்","சகலமும்","சக்கரத்தினடி","சஞ்சலப்படுவதும்","சஞ்சாரம்","சத்தியம்","சந்திக்க","சந்திக்கயிருந்த","சந்தித்தால்","சந்தித்தேன்","சந்திப்புகள்","சந்திப்புக்குப்","சந்தேகமாக","சந்தேகம்","சந்தோஷத்துடன்","சந்தோஷத்தை","சந்தோஷமாக","சப்தங்களின்","சப்தங்களும்","சப்தத்தை","சப்தமாக","சமயங்களில்","சமயங்களில்கதவை","சமயத்தில்","சமிக்ஞை","சமுத்திரமும்","சம்பவங்களும்","சம்பளம்","சரணாலயம்","சராசரமும்","சரியாகிவிட்டேன்","சரீரத்துடனும்","சரீரமே","சருகுகள்","சலிப்பாற்ற","சளைக்காமல்","சற்றுநேரத்தில்","சன்னலிடமும்","சன்னலுக்கு","சன்னலுக்கும்","சன்னலைத்","சன்னல்களினூடாக","சன்னல்களின்","சன்னல்களுக்குத்","சன்னல்களைத்","சாக்கடை","சாந்தப்படுமோ","சாமத்தில்","சாம்பல்","சாயங்கால","சாயங்காலத்தில்","சாயங்காலம்","சாயைகளின்","சாயையாகக்","சாய்த்துவைக்கப்படுகிறது","சார்த்திவிட்டு","சாலை","சாலையில்","சாலையோரத்தில்","சாவகாசமாகத்","சாவகாசமாய்","சாவதானத்தைப்","சாவதானம்","சாவியின்றி","சாவியுடன்","சாளரத்தினூடே","சிங்கங்கள்","சிங்கம்","சிட்டுக்குருவி","சிணுங்கி","சிணுங்கிச்","சிதறிக்கொண்டிருக்கிறது","சித்த","சித்தார்த்தனுடைய","சிந்தப்பட்ட","சிந்திய","சிப்பிகளைக்","சிப்பிகள்","சிருஷ்டித்துக்கொண்டு","சிலவற்றை","சிலேட்டே","சிலையாகின்றனர்","சில்லுகள்","சிவப்பு","சிறகசைத்து","சிறிதாகக்","சிறிது","சிறு","சிறுசிறு","சிறைச்சாலைக்குள்","சீட்டுகளை","சீட்டை","சீவராசிகளும்","சீவனுக்கு","சீவனை","சுடர்களை","சுட்டுக்கொள்கிறார்கள்","சுதந்திரத்துடன்","சுதாரித்து","சுந்தர","சுமைகளைத்","சும்மா","சுவரில்","சுவரொட்டிகளில்","சுவர்களாகவும்","சுவர்களையும்","சுவர்கள்","சுவர்க்கம்","சுழலக்","சுழற்பாதைகளை","சுழித்துக்காட்டு","சுழித்துச்","சுற்றிவளைக்கின்றன","சுற்று","சூட்டிய","சூரிய","சூரியப்பிரபையில்","சூரியனுக்கு","சூரியனுக்குக்","சூரியனைக்","சூரியன்","சூர்யாக்கள்","சூழ்கிறது","சூன்யத்தின்","செத்த","செய்கிறேன்","செய்கிறோம்","செய்கின்றன","செய்தாய்","செய்து","செய்துகொள்ளவேண்டும்","செய்துவிட்டேன்போல","செய்வதற்காக","செய்வதும்","செய்வோம்","செல்கிறார்கள்","செல்கிறான்","செல்கையில்","செல்ல","செல்லக்","செல்லயிருந்த","செல்வது","செல்வதுபோல்","செல்வான்","செல்வேன்","செவியிலும்","செழிப்பு","சென்ற","சென்றபடியிருக்கிறது","சென்றபடியிருக்கின்றன","சென்றிருந்தேன்","சென்றுவிடு","சென்றுவிட்டதா","சென்றுவிட்டன","சென்றுவிட்டார்கள்","சென்றுவிட்டேன்","சேர","சேர்ந்திசைக்","சொட்டிக்கொண்டிருப்பதைப்","சொட்டுகின்றன","சொந்த","சொப்பனத்தில்","சொல்","சொல்கிறாள்","சொல்கிறான்","சொல்கூடப்","சொல்லக்கூடாது","சொல்லப்பட்டுவிட்டது","சொல்லமுடியும்","சொல்லலாமா","சொல்லாது","சொல்லிவிட்டு","சொல்லும்","சொல்லேன்","சொல்வது","சொல்வேனே","சொல்வேன்","சொற்களாக","சொற்கள்","சோகத்தின்","சோகம்தான்","சோர்ந்து","சோவென","சோளக்கொல்லை","ஞாபகத்துக்கு","ஞாபகப்பூர்வமாக","ஞாபகம்","ஞானத்துடனும்","தகப்பனை","தகர்க்கப்படும்","தகும்","தங்களைக்","தடுப்பதுமாகச்","தட்டப்படுவதுபோல","தட்டி","தட்டிவிடவில்லையே","தட்டுவது","தண்ணீரை","தண்ணீர்ப்","ததும்புகிறது","தம்","தயங்கி","தர","தரப்பட்டுவிடுகிறது","தரிசிக்கலாம்","தருகிறாய்","தருணங்களில்","தருணங்கள்தானா","தருணம்","தரைக்கு","தரைமட்டம்","தலைகாட்டத்","தலைகீழாய்த்","தலைப்பிரட்டை","தலையணை","தலையணையாக்கி","தலையாட்டி","தலையிலிருந்து","தலையில்","தவளைகள்","தவளையின்","தவறவிட்டால்","தவறவிட்டுவிடும்","தவறாகப்","தவறு","தவிர","தனக்கு","தனது","தனித்தனியாகச்","தனித்திருக்கும்","தனிமை","தனிமையில்","தனிமையும்","தனியன்","தனிவானம்","தன்னுணர்விழக்கிறார்","தன்னைத்தானே","தாக்குகிறார்","தாடை","தார்ச்சாலை","தாவரங்களைப்","தாவரங்கள்","தாவுகிறது","தாழ்வாரத்து","தாறுமாறாக","தாறுமாறாய்","தாறுமாறான","தானொரு","தான்தான்","திகைப்பை","திக்குத்","திசை","திசைக்குத்","திசையில்","திடீரெனக்","தியானத்தின்","தியானம்போல","திரிகிறது","திருகாணிகளைக்","திருகாணிதான்","திருதிருவென","திருத்து","திரும்பத்திரும்ப","திரும்பவேண்டும்","திரும்பிச்","திரும்பிப்பார்க்கிறேன்","திரும்பியதும்","திரும்பிவிடுவேன்","திரும்பினேன்","திரும்பும்","திறக்கவோ","திறக்கிறது","திறக்கிறீர்கள்","திறக்கிறேன்","திறந்திருக்கும்","திறந்து","திறந்துகொண்டேயிருப்பது","திறந்தேதான்","தீண்டுவது","தீர்த்திருக்கிறேன்","தீர்ந்த","தீர்ந்துகொண்டிருக்கிறது","தீவத்து","தீவு","துக்கத்துடன்","துக்கமாக","துடைத்துக்கொள்கிறேன்","துயரத்துடனும்","துயராக","துவங்கியது","துவங்குகின்றன","துளி","துளிகளோடு","துளிதான்","துளியினைப்","துறந்து","தூக்கத்தில்","தூக்கி","தூக்கிக்கொண்டு","தூக்கிவருகிறார்கள்","தூசிகளுக்கோ","தூசியைத்","தூரத்திலிருப்பவனாகவும்","தூரத்து","தூராதி","தூல","தெரியாதவை","தெரியாது","தெரியுமா","தெரிவதிலும்","தெரிவிக்கும்","தென்மூலையில்","தேக்கிய","தேடி","தேடிக்கொண்டிருக்கிறார்கள்","தேடியதும்","தேதியைப்போல","தேநீர்","தேயிலைப்","தேரைகள்","தேர்ந்தெடுப்பதாம்","தேவாலய","தேவாலயச்","தொகுதிகளுக்குள்","தொகுப்பில்","தொங்குகின்றன","தொட","தொடங்குகிறார்கள்","தொடப்படாமலும்","தொடப்படுவதுமில்லை","தொடர்ந்து","தொடாத","தொடாமலும்","தொடுகிறான்","தொடுகையுமில்லை","தொட்ட","தொட்டிலில்","தொட்டுக்","தொட்டுக்கொள்கிறார்கள்","தொட்டுப்பார்க்கிறேன்","தொட்டுப்பார்த்தேன்","தொலைவிலிருந்து","தொலைவினில்","தொலைவுகளினூடே","தொலைவைப்","தோட்டம்","தோரணங்களினூடே","தோள்பட்டைகள்","தோன்றியது","தோன்றிற்று","தோன்றுகிறது","நகர","நகரம்","நகர்ந்து","நசுங்கிவிட்டது","நடக்கத்","நடக்கலாம்","நடக்கிறான்","நடக்கையில்","நடந்துகொண்டிருக்கிறார்","நடந்துகொண்டிருக்கிறேன்","நடந்துகொண்டிருந்திருக்கிறது","நடந்தேன்","நடப்பதில்","நடப்பேனே","நடனமாக","நடனம்","நடித்தபடி","நடுக்காட்டில்","நடை","நடைப்பயிற்சியில்","நண்பகல்","நண்பரை","நண்பர்கள்","நதி","நதிகளில்","நத்தை","நம்மைக்","நரம்புகளே","நல்ல","நழுவ","நழுவிப்போய்விடு","நளிர்த்துளி","நள்ளிரவு","நள்ளிரவுக்குப்","நறுமணத்தை","நறுமணம்","நனைந்த","நன்மைகள்","நன்றி","நன்றிகெட்டவன்","நன்றிகெட்டு","நாங்கள்","நாட்களாக","நாட்களாகவே","நாட்களாயிற்று","நாட்களேயான","நாட்கள்","நாம்","நாம்தான்","நாயும்","நாளைக்குத்","நாற்காலிகள்","நாற்காலியில்","நாற்பது","நானும்தான்","நானே","நானொன்றும்","நான்கு","நிகழ்த்துகிறேன்","நிச்சலனம்","நிமிடத்தில்","நிமிடம்தான்","நிரப்பும்","நிலவு","நிலவுகள்","நிலவுகூட","நிலவொளி","நிலவொளியை","நிலைக்கு","நில்லாமல்","நிழலாகக்","நிழலாகயிருப்பது","நிழலும்","நிழலுருவமோ","நிழல்களோ","நிறுத்தத்திற்கு","நிறுத்தற்புள்ளி","நிறுத்திவிட்டு","நிறைந்த","நிறைய","நிறையவே","நிறைவானத்தை","நிற்கவியலாது","நிற்கிறார்கள்","நிற்கின்றது","நிற்கின்றன","நினைக்கிறேன்","நினைக்கும்","நினைத்தது","நினைத்திருந்தேன்","நினைத்துப்","நினைப்பில்","நினைவிருக்கிறதோ","நினைவு","நினைவுகளால்","நினைவுக்கு","நினைவுச்சின்னம்","நின்றுகொண்டிருக்கிறாய்","நின்றுகொண்டிருந்தது","நிஜம்","நீக்கப்பட்டு","நீங்களும்","நீட்டிச்","நீட்டினால்","நீட்டுகிறது","நீண்டநாளுக்குப்","நீண்டு","நீந்த","நீந்திக்கடக்க","நீரினை","நீர்","நீலப்","நீலம்","நீலவதனம்தனை","நீளக்காகிதங்களை","நீளும்","நீள்கின்றது","நுரை","நுரைகளையும்","நுழைகிறது","நூறாயிரம்","நூற்றுக்கணக்கான","நெருங்கி","நெருங்கிப்","நெருங்கும்தோறும்","நெருப்புக்கட்டிகள்","நெளியும்","நெறிப்படுத்திக்கொண்டு","நேரத்தில்","நேரமாவது","நேரம்","நேரிடும்","நேற்றில்லை","நேற்று","நேற்றுகளை","நேற்றுகளைக்","நைய்ய","நொடிதான்","நொடியிலும்","நொடியின்","நொடியும்","நொறுங்குகிறது","நோக்கி","நோக்கிச்","நோட்டுப்புத்தகத்தின்","நோய்","நோய்களுக்கு","பகுதி","பசுமை","பசுவுடன்","பச்சை","பஞ்சுக்கன்னத்தை","படகில்","படகினைப்","படகுகளென","படகுக்கு","படலமெனக்","படிக்க","படிக்கட்டாக","படிக்கட்டுகளைக்","படிக்கட்டுகள்","படிக்கட்டுக்கும்","படிக்கட்டை","படிக்கட்டொன்றில்","படித்துப்பார்க்கிறது","படிந்த","படுக்கத்துவங்குகிறான்","படுக்கைக்குத்","படுக்கையென்றாக்கி","படுத்துக்கொள்கிறேன்","படை","பட்ட","பட்டப்பகலில்","பணிகள்","பணிநேரம்","பதறிக்கொண்டிருக்கிறது","பதித்து","பதித்துப்","பதிலில்லை","பதிலுக்கு","பதிலையும்","பந்தினைப்","பயங்கரமா","பயன்படுத்தாது","பயன்படுத்தி","பரபரப்பான","பரவசத்தை","பரவாயில்லையே","பரிசிக்காமலே","பரிசு","பரிசுப்பொருட்களை","பல","பலவிதமான","பலவீன","பலவீனமானவை","பல்கிப்","பல்லாயிரக்கணக்கான","பல்லிடுக்கில்","பல்லொளியாண்டுத்","பவளப்பாறைகள்","பழகாத","பழக்கம்","பறக்க","பறக்கவும்","பறத்தல்","பறந்துவிட்டு","பறப்பார்கள்","பறவைகளின்","பறவையைச்","பறவையொன்று","பறித்துக்கொள்ளும்","பற்றியிருக்கிறான்","பனிக்கட்டிகளை","பாக்டீரியங்களின்","பாடல்களை","பாதம்","பாய்ந்து","பாரபட்சமின்றி","பார்க்கச்","பார்க்காதது","பார்க்கிறார்","பார்க்கும்","பார்த்த","பார்த்ததும்","பார்த்ததைப்","பார்த்தபடி","பார்த்தவர்","பார்த்தாயா","பார்த்தால்","பார்த்துக்","பார்த்துக்கொண்டிருக்கிறதா","பார்த்துக்கொண்டிருக்கிறது","பார்த்துக்கொண்டிருக்கிறார்கள்","பார்த்துக்கொண்டிருக்கும்","பார்த்துக்கொண்டிருந்தேன்","பார்த்துக்கொண்டிருந்தோம்","பார்த்துத்","பார்த்தும்","பார்வை","பார்வையின்","பாலைவனத்தில்","பாலைவனம்","பால்கனிகள்","பாவனையோடு","பாறைகள்","பாறையில்","பிடிக்கிறது","பிடித்து","பிடிப்பதும்","பிடிப்பவனைப்போல","பிடிவாதத்துடன்","பிடுங்கப்படுமோ","பிந்தைய","பிரச்சனையும்","பிரபஞ்சத்தை","பிரமாதமாக","பிரார்த்தனையை","பிரிகின்றன","பிரிய","பிரிவதுபோலவும்","பிரிவின்","பிரிவு","பிரிவைச்","பிறகுதான்","பிறகும்","பிறந்ததிலிருந்தே","பிறந்திருக்கிறேன்","பிறந்து","பிறவிகளை","பிறிதொருத்தி","பிறிதொருவனால்","பிறிதொன்று","பிற்பகல்","பின்தொடரப்படுபவன்","பின்னங்கழுத்தில்","பின்னிரவில்","பின்னிரவுகளில்","பீரங்கிகள்","புகுந்த","புகுந்து","புகைக்கிறேன்","புகைநெடுஞ்சாலை","புண்களை","புதர்களைப்","புதிதுபோலக்","புதியவர்களும்","புதியவர்கள்","புதியவைகளும்","புதிர்ப்பாதையைக்","புத்தகங்கள்","புத்தனே","புத்துணர்ச்சி","புயல்","புரிகிற","புரிந்தது","புரிந்து","புலப்பட்டுச்","புலன்களின்","புள்ளினங்கள்","புறப்படுகிறது","புறப்படுகின்றன","புறப்படுகையில்","புறப்பட்டு","புறமும்","புனித","பூங்கா","பூங்காவில்","பூங்காவினுள்","பூங்காவின்","பூட்டிவிட்டு","பூமி","பூமியிலேயே","பூனை","பூனையை","பூஜ்ஜியத்தைத்","பெட்டிகளை","பெட்டியைப்","பெயரிடப்படாத","பெயரிடுகிறேன்","பெயரில்லை","பெயர்த்துவைத்திருக்கிறார்கள்","பெயர்ப்பலகைகளில்","பெய்கிறது","பெய்தால்","பெருக","பெரும்புகைப்புயல்","பேச","பேசத்","பேசவில்லை","பேசிக்கொள்கிறார்கள்","பேசினால்","பேச்சை","பேச்சைத்","பேதமற்று","பேரலை","பேரின்மையைப்","பேருந்து","பேருந்துகளில்","பைத்தியநிலையோடு","பைத்தியம்","பைய","பையப்","பையனின்","பையெனத்","பொடிநடையாகக்","பொத்திக்கொண்டால்","பொம்மை","பொம்மையினைப்","பொய்","பொய்யில்லை","பொருட்டு","பொறுக்கவில்லை","பொறுக்கிக்கொண்டு","பொறுப்பு","பொன்னெனக்","போகும்","போக்குவரத்து","போதாக்குறைக்குக்","போதாதா","போதாமையை","போதிசத்துவர்கள்","போதிசத்துவனுக்குப்","போத்தலென","போய்","போய்விடும்","போய்விட்டது","போராடுகின்றன","போலத்","போலத்தான்","போலப்","போலாடும்","போலிருந்தது","போலும்","போலே","போன்றது","போன்றவர்களை","போன்று","மகளுடன்","மகனிடம்","மகிழ்ச்சி","மங்கலாகத்","மங்கல்","மஞ்சளாய்","மஞ்சள்","மடல்களில்","மட்டம்","மட்டுமல்ல","மட்டுமில்லை","மட்டுமின்றி","மணலில்","மணலைப்","மணல்","மணற்துகள்களின்","மணிக்கான","மணிநாதமாகத்","மண்டபமென","மண்டபம்","மண்டலத்தின்","மண்ணாய்ப்","மண்ணை","மண்ணோடு","மதிப்பெண்","மதிலுக்கு","மது","மத்திய","மத்தியான","மந்தாரமிட்டுக்","மந்திகளின்","மயிலும்","மரகதப்பச்சையைப்","மரண","மரணத்தால்","மரணத்திலிருந்து","மரத்தடியில்","மரத்தின்","மரவுச்சியில்","மர்ம","மர்மத்தின்","மலரையும்","மலர்","மலர்கள்","மலர்ந்து","மலிந்து","மலையுச்சியில்","மழை","மழைக்காலத்தில்","மழைத்துளிகள்","மழைப்பொழிவுக்கு","மறக்க","மறந்து","மறந்துபோய்","மறந்துவிடு","மறந்துவிட்டு","மறுகரையிலிருந்து","மறுக்கும்","மறுபக்கத்தை","மறைகிறது","மறைத்தபடி","மறைந்து","மறைவதைப்","மற்றபடி","மற்றவை","மற்றெல்லா","மற்றொருவர்","மனசுக்குக்","மனநிலையில்","மனிதரின்றி","மனிதர்களுக்காக","மனிதர்களையும்","மனிதன்","மாடி","மாட்டேன்","மாட்டோம்","மாதிரி","மாத்திரமே","மாத்திரம்","மாபெரும்","மாயா","மாலுமிகளும்","மாலைநேர","மாலைநேரக்","மாலைப்","மாலைப்பொழுதுகள்","மாலைவானின்","மாலைவேளை","மாளிகைபோல","மாளிகையை","மாறாக","மாறிக்கொள்ள","மாறுகிறது","மாற்றயியலும்","மாற்றி","மாற்றிவிட்டாய்","மானுட","மானுடர்களுக்கும்","மிகத்தனிமையான","மிச்சம்","மிடுக்குடன்","மிதந்துகொண்டிருக்கிறேன்","மிதித்து","மிருதினை","மின்மினி","மின்மினியினுள்","மின்விளக்குகளெனத்","மின்னலுடன்","மின்னிணைப்புகளையும்","மின்னுகின்றன","மின்னும்","மீளமீள","மீள்கிறார்கள்","முகப்புவிளக்குகளுடன்","முகமற்று","முகில்","முகில்கள்","முடிந்ததேயில்லை","முடிந்திருக்கும்","முடிந்திருந்தால்","முடிந்துவிட்டது","முடியாததாக","முடியாதபடி","முடியாது","முடிவற்றுச்","முடிவின்மையைச்","முடிவெடுக்க","முடிவேயில்லாத","முட்டிக்கொள்கிறார்","முட்டும்","முணுமுணுப்பதைக்","முதலாளி","முதல்முறையாக","முத்தமிட","முத்தமிட்டதாகக்","முத்திரையிடப்பட்ட","முந்தியே","முந்தைய","முயல்கிறது","முயல்வதைப்","முயன்று","முயன்றுகொண்டிருக்கிறார்","முழிக்கிறேன்","முழுவதும்","முற்றாக","முற்றிலும்","முன்பிருந்ததைப்போல","முன்னேறுகிறது","மூக்குக்கண்ணாடிபோல","மூடவோ","மூடிக்கிடப்பாயா","மூடியவாறு","மூடியிருக்கும்","மூட்டைக்கட்டிக்கொண்டு","மூழ்கத்தொடங்குகிறது","மூழ்கிச்","மூழ்கும்","மூழ்குவதுபோலவும்","மெது","மெதுமெதுவாக","மெத்தை","மெழுகுவர்த்திச்","மெளன","மெளனமாக","மே","மேகத்துண்டு","மேகமாக","மேசையில்","மேசையின்","மேம்பாலத்தில்","மேல்மாடத்துக்","மேற்கண்ட","மைதானத்தில்","மையம்","மொட்டைமாடிக்குச்","மொத்தச்","மொத்தம்","மொழிக்கு","மொழிபெயர்த்துக்","மொழியின்றி","மோசமான","யா","யாத்திரைகளை","யாமம்","யாரா","யாரிடமாவது","யாரிட்ட","யாரோயொருவர்","யாவரும்","யாவுமே","யானை","யுகத்தின்","யுவதி","யோசித்தாலும்","யோசித்துப்","ரகசிய","ரகசியத்தைப்","ரகசியமாக","ரகசியமாகவே","ரணமாக","ரத்தத்தில்","ரத்தத்துளி","ரத்தத்துளிகள்","ரா","ராட்சதர்கள்","ராணுவ","ராத்திரியின்மீது","ராஜினாமா","ரீங்காரமிடுகின்றன","ரோந்து","ரோஜாக்களைப்","ரோஜாவை","ரோஜாவைப்","லட்சம்","லாரி","லீலை","வகுப்பறை","வகுப்பு","வசிப்பவனை","வடிக்கிறேன்","வடிவற்ற","வடிவிலிருந்து","வடிவே","வணக்கம்","வண்டி","வண்டு","வண்டுகள்","வண்ணத்தில்","வண்ணம்","வதனம்","வந்தது","வந்ததுபோல","வந்தவர்களென","வந்தன","வந்தால்","வந்திறங்கினேன்","வந்துகொண்டிருந்த","வந்துகொண்டே","வந்துவிடுகிறது","வயல்வெளியினால்","வரவில்லை","வரவே","வராதே","வருகிறது","வருகிறான்","வருகிறேன்","வருகின்றனவா","வருங்கால","வருடக்கணக்கில்","வருடுதல்","வருவார்கள்","வரைக்கும்","வரைந்துகொண்டு","வரையப்பட்டதுதான்","வரையும்","வலது","வலியே","வழியவிருக்கும்","வழியே","வளர்ந்துகொண்டிருக்கிறது","வறுமை","வா","வாகனங்களால்","வாகனங்களின்","வாகனங்களையும்","வாசல்","வாதிட்டுகொண்டிருக்கும்","வாய்ப்பு","வாரிவிடு","வார்த்தைகளில்","வார்த்தையையும்","வால்","வாழ்வின்","வாழ்வுருக்கி","வானத்திற்கு","வானத்தைப்","வானம்","வானுக்குக்","விடவும்","விடாதே","விடாப்பிடியாய்","விடுதலையைக்","விடுப்பு","விடுமுறைக்","விடும்","விடைகொடுக்கிறேன்","விடைத்தாளென","விடைபெறுகிறேன்","விட்டால்","விட்டிறங்கி","விட்டு","விட்டுச்செல்லாதே","விட்டுவிட்டு","விண்ணப்பம்","விண்ணுலகத்துக்குக்","விண்ணேகக்கூடிய","விண்மீன்கள்","விண்வயப்பட்டு","விதி","விதிக்கப்பட்ட","விமானம்","வியப்புடன்","வியர்வைத்","வியர்வைத்துளிகளுடன்","விரிசல்","விருட்டென்று","விரைகின்றன","விரைந்து","விலங்குகளையும்","விழாது","விழித்ததும்","விழித்தல்","விழித்தெழுகின்றன","விழித்தெழுந்துவிட்டேன்","விழுகிறது","விழுகின்றன","விழுங்கல்கள்","விழுமெனத்","விளிம்பில்","விளையாட்டில்","வினவும்","வீசாதபோதெல்லாம்","வீசிவிடும்","வீசும்போதெல்லாம்","வீடுகளின்","வீடுகளை","வீட்டில்","வீட்டுக்குத்","வீட்டுக்குள்","வீட்டைச்","வீரர்கள்","வீழ்வதுபோல்","வெங்காற்றில்","வெடிவைத்துத்","வெண்சங்குகள்","வெண்ணிற","வெயில்","வெய்யில்","வெளவாலைப்","வெளவால்","வெளிக்குள்","வெளிச்சம்","வெளிப்படுத்துதல்","வெளியிலிருக்கும்","வெளியேயிருந்து","வெளியேறவும்","வெளியேறுகின்றனர்","வெளியேற்றம்","வெளியேற்றிக்கொண்டிருக்கிறது","வெளிவிடுகிறேன்","வெளிவிடுகின்றன","வெள்ளையடிக்கப்படுகின்றன","வெறிக்கிறான்","வெறித்துக்கொண்டிருக்கிறான்","வெறித்துப்பார்த்தால்","வெறுமைக்கெதிராக","வெறுமையின்","வெறுமையுமான","வெறுமையை","வெறும்","வெற்றிடங்களாக","வெற்றிடமும்","வேகத்தில்","வேட்டையாடப்பட்ட","வேட்டையாடுபவனைப்","வேண்டிய","வேண்டியிருக்கிறது","வேண்டுமானாலும்","வேண்டுமானால்","வேதனை","வேதனையும்","வேர்கள்","வேளை","வேளையில்","வேறுவேறு","வேறெங்கிருந்தோ","வேறெதுவோ","வேறென்ன","வேறேங்கேயும்","வேறொரு","வை","வைகறை","வைக்கப்பட்ட","வைக்கப்பெற்ற","வைக்கிறான்","வைத்த","வைத்தியம்","வைத்திருக்கிறேன்","வைத்திருப்பதெல்லாம்","ஜன","ஜொலித்தான்","ஜோடி","ஜோடியாகப்","ஹலோ","ஹாரன்"],"freq":[68,35,29,18,16,15,14,13,13,12,12,11,11,10,9,9,9,9,9,8,8,8,8,8,8,7,7,7,7,7,7,7,7,6,6,6,6,6,6,6,6,6,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"fontFamily":"Latha","fontWeight":"bold","color":["#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77","#778DA9","#A9BCD0","#CCDDEE","#EAF4FC","#0D1B2A","#1B263B","#415A77"],"minSize":0,"weightFactor":5.294117647058823,"backgroundColor":"white","gridSize":0,"minRotation":-0.7853981633974483,"maxRotation":0.7853981633974483,"shuffle":true,"rotateRatio":0.4,"shape":"circle","ellipticity":0.65,"figBase64":null,"hover":null},"evals":[],"jsHooks":{"render":[{"code":"function(el,x){\n                        console.log(123);\n                        if(!iii){\n                          window.location.reload();\n                          iii = False;\n\n                        }\n  }","data":null}]}}</script>
+<script type="application/htmlwidget-sizing" data-for="htmlwidget-0da6b19313ded17e4a12">{"viewer":{"width":450,"height":350,"padding":0,"fill":true},"browser":{"width":960,"height":500,"padding":0,"fill":true}}</script>
+</body>
+</html>

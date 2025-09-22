@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wordclouds Project</title>
+  
+  <!-- Font Awesome for monochrome icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    /* Autumn palette */
+    :root {
+      --bg: #F5EBDD;       /* soft cream */
+      --primary: #D9822B;  /* burnt orange */
+      --secondary: #5C4033;/* deep brown */
+      --accent: #7D8B6F;   /* muted olive */
+    }
+
+    body {
+      margin: 0;
+      font-family: "Georgia", serif;
+      background-color: var(--bg);
+      color: var(--secondary);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      margin-bottom: 2rem;
+      color: var(--secondary);
+      text-align: center;
+    }
+
+    .tabs {
+      display: flex;
+      flex-direction: column;
+      gap: 1.2rem;
+      align-items: center;
+    }
+
+    .tab {
+      background-color: var(--primary);
+      color: white;
+      text-decoration: none;
+      font-size: 1.4rem;
+      font-weight: bold;
+      padding: 1rem 2.5rem;
+      border-radius: 12px;
+      text-align: center;
+      transition: background-color 0.3s ease, transform 0.2s ease;
+      width: 280px;
+    }
+
+    .tab:hover {
+      background-color: var(--accent);
+      transform: translateY(-3px);
+    }
+
+    footer {
+      margin-top: 50px;
+      text-align: center;
+      font-size: 0.9em;
+      color: #666; /* subtle grey */
+    }
+
+    .footer-link {
+      text-decoration: none;
+      color: inherit; /* matches the footer text color */
+      border-bottom: 1px dotted #999; /* gentle underline effect */
+      transition: color 0.3s ease, border-color 0.3s ease;
+    }
+
+    .footer-link:hover {
+      color: #A0522D; /* warm autumn brown on hover */
+      border-color: #A0522D;
+    }
+
+  </style>
+</head>
+<body>
+
+  <h1><i class="fa-solid fa-book"></i> Abhi's Wordclouds Project</h1>
+
+  <div class="tabs">
+    <a href="golden-sunset/index.html" class="tab" target="_blank" rel="noopener noreferrer">Golden Sunset</a>
+    <a href="tiny-cockroach/index.html" class="tab" target="_blank" rel="noopener noreferrer">Tiny Cockroach</a>
+    <a href="little-prince/index.html" class="tab" target="_blank" rel="noopener noreferrer">The Little Prince</a>
+    <a href="happy-prince/index.html" class="tab" target="_blank" rel="noopener noreferrer">The Happy Prince</a>
+    <a href="peacock-blue/index.html" class="tab" target="_blank" rel="noopener noreferrer">Peacock Blue</a>
+    <a href="the-lullaby/index.html" class="tab" target="_blank" rel="noopener noreferrer">The Lullaby</a>
+  </div>
+
+<!-- Tiny Birthday Surprise - Animated Version -->
+<style>
+  #birthdayIcon {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    font-size: 2rem;
+    cursor: pointer;
+    z-index: 1000;
+    transition: transform 0.2s;
+  }
+  #birthdayIcon:hover {
+    transform: scale(1.2);
+  }
+
+  #birthdayPopup {
+    display: none;
+    position: fixed;
+    top: 30%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    background: #fff7e6;
+    border: 2px solid #ffcc00;
+    border-radius: 15px;
+    padding: 30px 40px;
+    text-align: center;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+    z-index: 1001;
+    font-family: sans-serif;
+    transition: transform 0.3s ease-out;
+  }
+
+  #birthdayPopup.show {
+    display: block;
+    transform: translate(-50%, -50%) scale(1);
+  }
+
+  #birthdayPopup button {
+    margin-top: 15px;
+    padding: 8px 15px;
+    background-color: #ffcc00;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background 0.2s;
+  }
+  #birthdayPopup button:hover {
+    background-color: #ffdd33;
+  }
+
+  .confetti {
+    position: fixed;
+    pointer-events: none;
+    z-index: 9999;
+    user-select: none;
+  }
+</style>
+
+<!-- The 🎉 Icon -->
+<div id="birthdayIcon" title="Click me for a surprise!">🎉</div>
+
+<!-- Popup -->
+<div id="birthdayPopup">
+  <h2>🎂 Happy Birthday My Eternal Sunshine! 🎈</h2>
+  <p>Hope your day is as colorful and joyful as these wordclouds!</p>
+  <button onclick="closePopup()">Close</button>
+</div>
+
+<script>
+  const icon = document.getElementById('birthdayIcon');
+  const popup = document.getElementById('birthdayPopup');
+
+  icon.addEventListener('click', () => {
+    popup.classList.add('show');
+    confettiEffect();
+  });
+
+  function closePopup() {
+    popup.classList.remove('show');
+  }
+
+  // Colorful confetti
+  function confettiEffect() {
+    const colors = ['#ff4d4d','#ffcc00','#66ff66','#66ccff','#ff66cc'];
+    for(let i=0; i<50; i++){
+      let confetti = document.createElement('div');
+      confetti.className = 'confetti';
+      confetti.innerText = '🎉';
+      confetti.style.left = Math.random() * window.innerWidth + 'px';
+      confetti.style.top = Math.random() * window.innerHeight + 'px';
+      confetti.style.fontSize = (12 + Math.random()*18) + 'px';
+      confetti.style.color = colors[Math.floor(Math.random()*colors.length)];
+      confetti.style.opacity = Math.random();
+      document.body.appendChild(confetti);
+      setTimeout(()=> confetti.remove(), 2500);
+    }
+  }
+</script>
+
+
+  <footer>
+    <p>Created with <i class="fa-solid fa-heart"></i> | For personal and ethical sharing only</p>
+    <p>
+    <a href="https://github.com/yourusername/wordclouds-project" 
+       target="_blank" rel="noopener noreferrer" class="footer-link">
+       View Source on GitHub
+    </a>
+  </p>
+  </footer>
+
+</body>
+</html>
