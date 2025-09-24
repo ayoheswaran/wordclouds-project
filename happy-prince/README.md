@@ -51,14 +51,15 @@ Includes **only words appearing more than 5 times**, after removing common fille
    - Gradient from Deep Chestnut Brown → Pale Cream
 - **Autumn Balanced palette**: for filtered-word wordclouds
    - Gradient from Deep Mahogany → Pale Wheat  
+
 Colors can be modified in the script via `autumn` and `autumn_balanced`.
 
-## Previews
+### Previews
 
-### Wordcloud (All Words)
+#### Wordcloud (All Words)
 ![All words](images/wordcloud_all.png)
 
-### Wordcloud (Filtered)
+#### Wordcloud (Filtered)
 ![Filtered words](images/wordcloud_filtered.png)
 
 ### 4. Optional Customizations  
