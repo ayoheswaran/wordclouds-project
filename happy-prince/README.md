@@ -53,6 +53,14 @@ Includes **only words appearing more than 5 times**, after removing common fille
    - Gradient from Deep Mahogany → Pale Wheat  
 Colors can be modified in the script via `autumn` and `autumn_balanced`.
 
+## Previews
+
+### Wordcloud (All Words)
+![All words](images/wordcloud_all.png)
+
+### Wordcloud (Filtered)
+![Filtered words](images/wordcloud_filtered.png)
+
 ### 4. Optional Customizations  
 - **Top N words**: Limit displayed words (uncomment `top_n` section)
 - **Custom PNG shape**: Place PNG in working directory and uncomment `figPath`
