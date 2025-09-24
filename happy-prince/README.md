@@ -1,6 +1,6 @@
 # Wordclouds from *The Happy Prince and Other Tales*
 
-Date: 2025-09-24
+Date: 2025-09-24  
 R version: >= 4.5.0
 
 ## Description
@@ -57,13 +57,13 @@ Colors can be modified in the script via `autumn` and `autumn_balanced`.
 - **Wordcloud size**: Adjust `size` parameter for clarity on different mediums
 
 ### 5. Example Usage  
-`# Generate filtered wordcloud
+```# Generate filtered wordcloud
 wc_filtered <- wordcloud2(freq_tbl_above_five, 
                           size = 0.8,
                           color = colorRampPalette(autumn_balanced)(nrow(freq_tbl_above_five)),
                           fontFamily = "Georgia",
                           backgroundColor = "white",
-                          shape = "circle")`  
+                          shape = "circle")```    
 After running, open `index.html` to interact with the wordcloud.
 
 ## License  
