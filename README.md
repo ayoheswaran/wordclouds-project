@@ -6,14 +6,14 @@ This repository contains **interactive wordclouds** using **R** and `wordcloud2`
 
 ## 📚 Books Included
 
-| Folder Name      | Link Label               | Notes |
+| Folder Name      | Description              | Notes |
 |----------------------|-------------------------|-------|
-| `golden-sunset`      | Poetry Book 1 (Tamil)  | Gift HTML only; original text (from Anthiyil Thikalvathu by V.N.Surya) not uploaded. Inspired by blue-shades theme. |
-| `tiny-cockroach`     | Poetry Book 2 (Tamil)  | Gift HTML only; original text (from Karapanium by V.N.Surya) not uploaded. Inspired by forest theme. |
-| `peacock-blue`       | Our Favorite Book (Tamil)| Shared favorite book HTML only; original text (from Vanmurasu 4: Neelam by Jeyamohan) not uploaded. Inspired by peacock theme. |
-| `the-lullaby`        | A passage (Tamil)      | A favorite Passage HTML only; original text (from Venmurasu 26: Muthalavin by Jeyamohan) not uploaded. Inspired by sea theme. |
-| `the-little-prince`  | Our Favorite Book (En) | Shared favorite book HTML only; original text (from The Little Prince by Antoine de Saint-Exupéry) not uploaded. Inspired by autumn-sunset theme. |
-| `the-happy-prince`   | The Happy Prince       | Public domain book by Oscar Wilde. Full code + HTML included for educational purposes. |
+| `golden-sunset`      | Poetry Book 1 (Tamil)  | Gift HTML only; original text (from Anthiyil Thikalvathu by V.N.Surya) not uploaded. Inspired by shades-of-blue theme. |
+| `tiny-cockroach`     | Poetry Book 2 (Tamil)  | Gift HTML only; original text (from Karapanium by V.N.Surya) not uploaded. Inspired by forest-moss theme. |
+| `peacock-blue`       | Fiction Book (Tamil)| Shared favorite book HTML only; original text (from Vanmurasu 4: Neelam by Jeyamohan) not uploaded. Inspired by peacock-feather theme. |
+| `the-lullaby`        | A passage (Tamil)      | A favorite Passage HTML only; original text (from Venmurasu 26: Muthalavin by Jeyamohan) not uploaded. Inspired by shades-of-sea theme. |
+| `little-prince`  | Fiction Book (English) | Shared favorite book HTML only; original text (from The Little Prince by Antoine de Saint-Exupéry) not uploaded. Inspired by autumn-sunset theme. |
+| `happy-prince`   | The Happy Prince       | Public domain book by Oscar Wilde. Full code + HTML included for educational purposes. |
 
 ---
 
@@ -28,20 +28,19 @@ This repository contains **interactive wordclouds** using **R** and `wordcloud2`
 ## 🛡 Licensing & Ethics
 
 - This project is intended for **educational and personal exploration** of literature.
-- The wordclouds and HTML code are **created by the repository owner**.
-- This HTML wordcloud is licensed under CC0-1.0.
-- The poetry and fiction themselves are copyrighted and not included.
+- The HTML wordclouds and R code are licensed under CC0-1.0.
+- The original texts of poetry and fiction themselves are copyrighted and not included.
 
 - **Gift books** (`golden-sunset`, `tiny-cockroach`) and **Shared favorite books and text** (`little-prince`, `peacock-blue`, `the-lullaby`): HTML only, **no original text uploaded**. Intended for personal viewing by the recipient.  
 - **Public domain book** (`the-happy-prince`): © Oscar Wilde, 1888. Public Domain. from 
 <a href="https://www.gutenberg.org/files/902/902-0.txt" target="_blank">Project Gutenberg</a>.
-</p>' Code, HTML, and frequency data included. You are free to use/adapt for educational purposes.  
+R Code, HTML, and sample images included. You are free to use/adapt for educational purposes. [Happy Prince Wordclouds](happy-prince/) 
 - Original authors are acknowledged.
 
 ---
 
 ## 📂 Repository Structure
-<pre>```text
+<pre>```
 wordclouds-project/
 │
 ├─ index.html                <-- main page linking all wordclouds
@@ -52,8 +51,14 @@ wordclouds-project/
 │   └─ index.html            <-- HTML only
 │
 ├─ happy-prince/             <-- Public domain book
-│   ├─ index.html            <-- interactive wordcloud
-│   └─ happy_prince_wordcloud.R
+│   ├─ images 
+│   │   └─ wordcloud_all.png
+│   │   └─ wordcloud_filtered.png
+│   └─ index.html            <-- interactive wordcloud
+│   └─ README.md            
+│   └─ sessionInfo.txt 
+│   └─ happy_prince_wordcloud.r 
+│    
 │
 ├─ little-prince/            <-- Shared favorite book: "The Little Prince" by Antoine de Saint-Exupéry
 │   └─ index.html            <-- HTML only
