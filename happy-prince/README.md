@@ -17,7 +17,8 @@ The script preprocesses the text, removes stopwords and filler words, counts wor
    - `NLP` (v0.3-2)
    - `htmlwidgets` (v1.6.4)
    - `RColorBrewer` (v1.1-3)
-> Tip: Run sessionInfo() inside the script to check exact R and package versions.  
+> Tip: Run sessionInfo() inside the script to check exact R and package versions.
+ 
 For full reproducibility, the complete `sessionInfo()` output (including all loaded namespaces and system details) is saved in [sessionInfo.txt](sessionInfo.txt).
 
 ## How to Run
