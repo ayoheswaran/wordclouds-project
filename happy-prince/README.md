@@ -31,39 +31,39 @@ The script preprocesses the text, removes stopwords and filler words, counts wor
 5. Open `index.html` in any web browser to explore the interactive wordcloud.
 
 ## Visual Guide
-1. Full Wordcloud (All Words)    
+### 1. Full Wordcloud (All Words)    
 Includes **all words after default stopword removal**.
 - Size: 0.4 (adjustable)
 - Gradient: **autumn palette**
 > Frequent words are darker; less frequent words are lighter.
 
-2. Filtered Wordcloud (Words > 5 Occurrences)  
+### 2. Filtered Wordcloud (Words > 5 Occurrences)  
 Includes **only words appearing more than 5 times**, after removing common filler words.
 - Size: 0.8 (for HTML display)
 - Gradient: **autumn_balanced palette**
 > Highlights the most meaningful words and provides a cleaner cloud.
 
-3. Color Palettes  
+### 3. Color Palettes  
 - **Autumn palette**: for full-word wordclouds
    - Gradient from Deep Chestnut Brown → Pale Cream
 - **Autumn Balanced palette**: for filtered-word wordclouds
    - Gradient from Deep Mahogany → Pale Wheat  
 Colors can be modified in the script via `autumn` and `autumn_balanced`.
 
-4. Optional Customizations  
+### 4. Optional Customizations  
 - **Top N words**: Limit displayed words (uncomment `top_n` section)
 - **Custom PNG shape**: Place PNG in working directory and uncomment `figPath`
 - **Custom stopwords**: Add additional filler words to `custom_stop`
 - **Wordcloud size**: Adjust `size` parameter for clarity on different mediums
 
-5. Example Usage  
+### 5. Example Usage  
 `# Generate filtered wordcloud
 wc_filtered <- wordcloud2(freq_tbl_above_five, 
                           size = 0.8,
                           color = colorRampPalette(autumn_balanced)(nrow(freq_tbl_above_five)),
                           fontFamily = "Georgia",
                           backgroundColor = "white",
-                          shape = "circle")`
+                          shape = "circle")`  
 After running, open `index.html` to interact with the wordcloud.
 
 ## License  
