@@ -8,15 +8,17 @@ This project generates **interactive word clouds** for “The Happy Prince” by
 The script preprocesses the text, removes stopwords and filler words, counts word frequencies, and produces an **HTML wordcloud** with optional custom color palettes and shapes.
 
 ## Requirements
-- **R**: version >= 4.3.1
+- **R**: version >= 4.5.0
 - **R packages** (installed automatically if missing):
-   - `wordcloud2` (v0.3)
-   - `dplyr` (v1.1.2)
-   - `stringr` (v1.5.0)
-   - `tm` (v0.9-3)
-   - `htmlwidgets` (v1.7)
+   - `wordcloud2` (v0.2.1)
+   - `dplyr` (v1.1.4)
+   - `stringr` (v1.5.2)
+   - `tm` (v0.7-16)
+   - `NLP` (v0.3-2)
+   - `htmlwidgets` (v1.6.4)
    - `RColorBrewer` (v1.1-3)
 > Tip: Run sessionInfo() inside the script to check exact R and package versions.
+For full reproducibility, the complete `sessionInfo()` output (including all loaded namespaces and system details) is saved in [sessionInfo.txt](sessionInfo.txt).
 
 ## How to Run
 1. Download the R script `happy_prince_wordcloud.R`.
@@ -57,16 +59,20 @@ Colors can be modified in the script via `autumn` and `autumn_balanced`.
 - **Wordcloud size**: Adjust `size` parameter for clarity on different mediums
 
 ### 5. Example Usage  
-```# Generate filtered wordcloud
+```
+# Generate filtered wordcloud
 wc_filtered <- wordcloud2(freq_tbl_above_five, 
                           size = 0.8,
                           color = colorRampPalette(autumn_balanced)(nrow(freq_tbl_above_five)),
                           fontFamily = "Georgia",
                           backgroundColor = "white",
-                          shape = "circle")```    
+                          shape = "circle")
+```    
 After running, open `index.html` to interact with the wordcloud.
 
 ## License  
 Text: Project Gutenberg, public domain  
 Code: CC0 1.0 License
+
+
 
