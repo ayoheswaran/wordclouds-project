@@ -1,0 +1,2272 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>wordcloud2</title>
+<style type="text/css">@layer htmltools {
+.html-fill-container {
+display: flex;
+flex-direction: column;
+
+min-height: 0;
+min-width: 0;
+}
+.html-fill-container > .html-fill-item {
+
+flex: 1 1 auto;
+min-height: 0;
+min-width: 0;
+}
+.html-fill-container > :not(.html-fill-item) {
+
+flex: 0 0 auto;
+}
+}
+</style>
+<script>(function() {
+  // If window.HTMLWidgets is already defined, then use it; otherwise create a
+  // new object. This allows preceding code to set options that affect the
+  // initialization process (though none currently exist).
+  window.HTMLWidgets = window.HTMLWidgets || {};
+
+  // See if we're running in a viewer pane. If not, we're in a web browser.
+  var viewerMode = window.HTMLWidgets.viewerMode =
+      /\bviewer_pane=1\b/.test(window.location);
+
+  // See if we're running in Shiny mode. If not, it's a static document.
+  // Note that static widgets can appear in both Shiny and static modes, but
+  // obviously, Shiny widgets can only appear in Shiny apps/documents.
+  var shinyMode = window.HTMLWidgets.shinyMode =
+      typeof(window.Shiny) !== "undefined" && !!window.Shiny.outputBindings;
+
+  // We can't count on jQuery being available, so we implement our own
+  // version if necessary.
+  function querySelectorAll(scope, selector) {
+    if (typeof(jQuery) !== "undefined" && scope instanceof jQuery) {
+      return scope.find(selector);
+    }
+    if (scope.querySelectorAll) {
+      return scope.querySelectorAll(selector);
+    }
+  }
+
+  function asArray(value) {
+    if (value === null)
+      return [];
+    if ($.isArray(value))
+      return value;
+    return [value];
+  }
+
+  // Implement jQuery's extend
+  function extend(target /*, ... */) {
+    if (arguments.length == 1) {
+      return target;
+    }
+    for (var i = 1; i < arguments.length; i++) {
+      var source = arguments[i];
+      for (var prop in source) {
+        if (source.hasOwnProperty(prop)) {
+          target[prop] = source[prop];
+        }
+      }
+    }
+    return target;
+  }
+
+  // IE8 doesn't support Array.forEach.
+  function forEach(values, callback, thisArg) {
+    if (values.forEach) {
+      values.forEach(callback, thisArg);
+    } else {
+      for (var i = 0; i < values.length; i++) {
+        callback.call(thisArg, values[i], i, values);
+      }
+    }
+  }
+
+  // Replaces the specified method with the return value of funcSource.
+  //
+  // Note that funcSource should not BE the new method, it should be a function
+  // that RETURNS the new method. funcSource receives a single argument that is
+  // the overridden method, it can be called from the new method. The overridden
+  // method can be called like a regular function, it has the target permanently
+  // bound to it so "this" will work correctly.
+  function overrideMethod(target, methodName, funcSource) {
+    var superFunc = target[methodName] || function() {};
+    var superFuncBound = function() {
+      return superFunc.apply(target, arguments);
+    };
+    target[methodName] = funcSource(superFuncBound);
+  }
+
+  // Add a method to delegator that, when invoked, calls
+  // delegatee.methodName. If there is no such method on
+  // the delegatee, but there was one on delegator before
+  // delegateMethod was called, then the original version
+  // is invoked instead.
+  // For example:
+  //
+  // var a = {
+  //   method1: function() { console.log('a1'); }
+  //   method2: function() { console.log('a2'); }
+  // };
+  // var b = {
+  //   method1: function() { console.log('b1'); }
+  // };
+  // delegateMethod(a, b, "method1");
+  // delegateMethod(a, b, "method2");
+  // a.method1();
+  // a.method2();
+  //
+  // The output would be "b1", "a2".
+  function delegateMethod(delegator, delegatee, methodName) {
+    var inherited = delegator[methodName];
+    delegator[methodName] = function() {
+      var target = delegatee;
+      var method = delegatee[methodName];
+
+      // The method doesn't exist on the delegatee. Instead,
+      // call the method on the delegator, if it exists.
+      if (!method) {
+        target = delegator;
+        method = inherited;
+      }
+
+      if (method) {
+        return method.apply(target, arguments);
+      }
+    };
+  }
+
+  // Implement a vague facsimilie of jQuery's data method
+  function elementData(el, name, value) {
+    if (arguments.length == 2) {
+      return el["htmlwidget_data_" + name];
+    } else if (arguments.length == 3) {
+      el["htmlwidget_data_" + name] = value;
+      return el;
+    } else {
+      throw new Error("Wrong number of arguments for elementData: " +
+        arguments.length);
+    }
+  }
+
+  // http://stackoverflow.com/questions/3446170/escape-string-for-use-in-javascript-regex
+  function escapeRegExp(str) {
+    return str.replace(/[\-\[\]\/\{\}\(\)\*\+\?\.\\\^\$\|]/g, "\\$&");
+  }
+
+  function hasClass(el, className) {
+    var re = new RegExp("\\b" + escapeRegExp(className) + "\\b");
+    return re.test(el.className);
+  }
+
+  // elements - array (or array-like object) of HTML elements
+  // className - class name to test for
+  // include - if true, only return elements with given className;
+  //   if false, only return elements *without* given className
+  function filterByClass(elements, className, include) {
+    var results = [];
+    for (var i = 0; i < elements.length; i++) {
+      if (hasClass(elements[i], className) == include)
+        results.push(elements[i]);
+    }
+    return results;
+  }
+
+  function on(obj, eventName, func) {
+    if (obj.addEventListener) {
+      obj.addEventListener(eventName, func, false);
+    } else if (obj.attachEvent) {
+      obj.attachEvent(eventName, func);
+    }
+  }
+
+  function off(obj, eventName, func) {
+    if (obj.removeEventListener)
+      obj.removeEventListener(eventName, func, false);
+    else if (obj.detachEvent) {
+      obj.detachEvent(eventName, func);
+    }
+  }
+
+  // Translate array of values to top/right/bottom/left, as usual with
+  // the "padding" CSS property
+  // https://developer.mozilla.org/en-US/docs/Web/CSS/padding
+  function unpackPadding(value) {
+    if (typeof(value) === "number")
+      value = [value];
+    if (value.length === 1) {
+      return {top: value[0], right: value[0], bottom: value[0], left: value[0]};
+    }
+    if (value.length === 2) {
+      return {top: value[0], right: value[1], bottom: value[0], left: value[1]};
+    }
+    if (value.length === 3) {
+      return {top: value[0], right: value[1], bottom: value[2], left: value[1]};
+    }
+    if (value.length === 4) {
+      return {top: value[0], right: value[1], bottom: value[2], left: value[3]};
+    }
+  }
+
+  // Convert an unpacked padding object to a CSS value
+  function paddingToCss(paddingObj) {
+    return paddingObj.top + "px " + paddingObj.right + "px " + paddingObj.bottom + "px " + paddingObj.left + "px";
+  }
+
+  // Makes a number suitable for CSS
+  function px(x) {
+    if (typeof(x) === "number")
+      return x + "px";
+    else
+      return x;
+  }
+
+  // Retrieves runtime widget sizing information for an element.
+  // The return value is either null, or an object with fill, padding,
+  // defaultWidth, defaultHeight fields.
+  function sizingPolicy(el) {
+    var sizingEl = document.querySelector("script[data-for='" + el.id + "'][type='application/htmlwidget-sizing']");
+    if (!sizingEl)
+      return null;
+    var sp = JSON.parse(sizingEl.textContent || sizingEl.text || "{}");
+    if (viewerMode) {
+      return sp.viewer;
+    } else {
+      return sp.browser;
+    }
+  }
+
+  // @param tasks Array of strings (or falsy value, in which case no-op).
+  //   Each element must be a valid JavaScript expression that yields a
+  //   function. Or, can be an array of objects with "code" and "data"
+  //   properties; in this case, the "code" property should be a string
+  //   of JS that's an expr that yields a function, and "data" should be
+  //   an object that will be added as an additional argument when that
+  //   function is called.
+  // @param target The object that will be "this" for each function
+  //   execution.
+  // @param args Array of arguments to be passed to the functions. (The
+  //   same arguments will be passed to all functions.)
+  function evalAndRun(tasks, target, args) {
+    if (tasks) {
+      forEach(tasks, function(task) {
+        var theseArgs = args;
+        if (typeof(task) === "object") {
+          theseArgs = theseArgs.concat([task.data]);
+          task = task.code;
+        }
+        var taskFunc = tryEval(task);
+        if (typeof(taskFunc) !== "function") {
+          throw new Error("Task must be a function! Source:\n" + task);
+        }
+        taskFunc.apply(target, theseArgs);
+      });
+    }
+  }
+
+  // Attempt eval() both with and without enclosing in parentheses.
+  // Note that enclosing coerces a function declaration into
+  // an expression that eval() can parse
+  // (otherwise, a SyntaxError is thrown)
+  function tryEval(code) {
+    var result = null;
+    try {
+      result = eval("(" + code + ")");
+    } catch(error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      try {
+        result = eval(code);
+      } catch(e) {
+        if (e instanceof SyntaxError) {
+          throw error;
+        } else {
+          throw e;
+        }
+      }
+    }
+    return result;
+  }
+
+  function initSizing(el) {
+    var sizing = sizingPolicy(el);
+    if (!sizing)
+      return;
+
+    var cel = document.getElementById("htmlwidget_container");
+    if (!cel)
+      return;
+
+    if (typeof(sizing.padding) !== "undefined") {
+      document.body.style.margin = "0";
+      document.body.style.padding = paddingToCss(unpackPadding(sizing.padding));
+    }
+
+    if (sizing.fill) {
+      document.body.style.overflow = "hidden";
+      document.body.style.width = "100%";
+      document.body.style.height = "100%";
+      document.documentElement.style.width = "100%";
+      document.documentElement.style.height = "100%";
+      cel.style.position = "absolute";
+      var pad = unpackPadding(sizing.padding);
+      cel.style.top = pad.top + "px";
+      cel.style.right = pad.right + "px";
+      cel.style.bottom = pad.bottom + "px";
+      cel.style.left = pad.left + "px";
+      el.style.width = "100%";
+      el.style.height = "100%";
+
+      return {
+        getWidth: function() { return cel.getBoundingClientRect().width; },
+        getHeight: function() { return cel.getBoundingClientRect().height; }
+      };
+
+    } else {
+      el.style.width = px(sizing.width);
+      el.style.height = px(sizing.height);
+
+      return {
+        getWidth: function() { return cel.getBoundingClientRect().width; },
+        getHeight: function() { return cel.getBoundingClientRect().height; }
+      };
+    }
+  }
+
+  // Default implementations for methods
+  var defaults = {
+    find: function(scope) {
+      return querySelectorAll(scope, "." + this.name);
+    },
+    renderError: function(el, err) {
+      var $el = $(el);
+
+      this.clearError(el);
+
+      // Add all these error classes, as Shiny does
+      var errClass = "shiny-output-error";
+      if (err.type !== null) {
+        // use the classes of the error condition as CSS class names
+        errClass = errClass + " " + $.map(asArray(err.type), function(type) {
+          return errClass + "-" + type;
+        }).join(" ");
+      }
+      errClass = errClass + " htmlwidgets-error";
+
+      // Is el inline or block? If inline or inline-block, just display:none it
+      // and add an inline error.
+      var display = $el.css("display");
+      $el.data("restore-display-mode", display);
+
+      if (display === "inline" || display === "inline-block") {
+        $el.hide();
+        if (err.message !== "") {
+          var errorSpan = $("<span>").addClass(errClass);
+          errorSpan.text(err.message);
+          $el.after(errorSpan);
+        }
+      } else if (display === "block") {
+        // If block, add an error just after the el, set visibility:none on the
+        // el, and position the error to be on top of the el.
+        // Mark it with a unique ID and CSS class so we can remove it later.
+        $el.css("visibility", "hidden");
+        if (err.message !== "") {
+          var errorDiv = $("<div>").addClass(errClass).css("position", "absolute")
+            .css("top", el.offsetTop)
+            .css("left", el.offsetLeft)
+            // setting width can push out the page size, forcing otherwise
+            // unnecessary scrollbars to appear and making it impossible for
+            // the element to shrink; so use max-width instead
+            .css("maxWidth", el.offsetWidth)
+            .css("height", el.offsetHeight);
+          errorDiv.text(err.message);
+          $el.after(errorDiv);
+
+          // Really dumb way to keep the size/position of the error in sync with
+          // the parent element as the window is resized or whatever.
+          var intId = setInterval(function() {
+            if (!errorDiv[0].parentElement) {
+              clearInterval(intId);
+              return;
+            }
+            errorDiv
+              .css("top", el.offsetTop)
+              .css("left", el.offsetLeft)
+              .css("maxWidth", el.offsetWidth)
+              .css("height", el.offsetHeight);
+          }, 500);
+        }
+      }
+    },
+    clearError: function(el) {
+      var $el = $(el);
+      var display = $el.data("restore-display-mode");
+      $el.data("restore-display-mode", null);
+
+      if (display === "inline" || display === "inline-block") {
+        if (display)
+          $el.css("display", display);
+        $(el.nextSibling).filter(".htmlwidgets-error").remove();
+      } else if (display === "block"){
+        $el.css("visibility", "inherit");
+        $(el.nextSibling).filter(".htmlwidgets-error").remove();
+      }
+    },
+    sizing: {}
+  };
+
+  // Called by widget bindings to register a new type of widget. The definition
+  // object can contain the following properties:
+  // - name (required) - A string indicating the binding name, which will be
+  //   used by default as the CSS classname to look for.
+  // - initialize (optional) - A function(el) that will be called once per
+  //   widget element; if a value is returned, it will be passed as the third
+  //   value to renderValue.
+  // - renderValue (required) - A function(el, data, initValue) that will be
+  //   called with data. Static contexts will cause this to be called once per
+  //   element; Shiny apps will cause this to be called multiple times per
+  //   element, as the data changes.
+  window.HTMLWidgets.widget = function(definition) {
+    if (!definition.name) {
+      throw new Error("Widget must have a name");
+    }
+    if (!definition.type) {
+      throw new Error("Widget must have a type");
+    }
+    // Currently we only support output widgets
+    if (definition.type !== "output") {
+      throw new Error("Unrecognized widget type '" + definition.type + "'");
+    }
+    // TODO: Verify that .name is a valid CSS classname
+
+    // Support new-style instance-bound definitions. Old-style class-bound
+    // definitions have one widget "object" per widget per type/class of
+    // widget; the renderValue and resize methods on such widget objects
+    // take el and instance arguments, because the widget object can't
+    // store them. New-style instance-bound definitions have one widget
+    // object per widget instance; the definition that's passed in doesn't
+    // provide renderValue or resize methods at all, just the single method
+    //   factory(el, width, height)
+    // which returns an object that has renderValue(x) and resize(w, h).
+    // This enables a far more natural programming style for the widget
+    // author, who can store per-instance state using either OO-style
+    // instance fields or functional-style closure variables (I guess this
+    // is in contrast to what can only be called C-style pseudo-OO which is
+    // what we required before).
+    if (definition.factory) {
+      definition = createLegacyDefinitionAdapter(definition);
+    }
+
+    if (!definition.renderValue) {
+      throw new Error("Widget must have a renderValue function");
+    }
+
+    // For static rendering (non-Shiny), use a simple widget registration
+    // scheme. We also use this scheme for Shiny apps/documents that also
+    // contain static widgets.
+    window.HTMLWidgets.widgets = window.HTMLWidgets.widgets || [];
+    // Merge defaults into the definition; don't mutate the original definition.
+    var staticBinding = extend({}, defaults, definition);
+    overrideMethod(staticBinding, "find", function(superfunc) {
+      return function(scope) {
+        var results = superfunc(scope);
+        // Filter out Shiny outputs, we only want the static kind
+        return filterByClass(results, "html-widget-output", false);
+      };
+    });
+    window.HTMLWidgets.widgets.push(staticBinding);
+
+    if (shinyMode) {
+      // Shiny is running. Register the definition with an output binding.
+      // The definition itself will not be the output binding, instead
+      // we will make an output binding object that delegates to the
+      // definition. This is because we foolishly used the same method
+      // name (renderValue) for htmlwidgets definition and Shiny bindings
+      // but they actually have quite different semantics (the Shiny
+      // bindings receive data that includes lots of metadata that it
+      // strips off before calling htmlwidgets renderValue). We can't
+      // just ignore the difference because in some widgets it's helpful
+      // to call this.renderValue() from inside of resize(), and if
+      // we're not delegating, then that call will go to the Shiny
+      // version instead of the htmlwidgets version.
+
+      // Merge defaults with definition, without mutating either.
+      var bindingDef = extend({}, defaults, definition);
+
+      // This object will be our actual Shiny binding.
+      var shinyBinding = new Shiny.OutputBinding();
+
+      // With a few exceptions, we'll want to simply use the bindingDef's
+      // version of methods if they are available, otherwise fall back to
+      // Shiny's defaults. NOTE: If Shiny's output bindings gain additional
+      // methods in the future, and we want them to be overrideable by
+      // HTMLWidget binding definitions, then we'll need to add them to this
+      // list.
+      delegateMethod(shinyBinding, bindingDef, "getId");
+      delegateMethod(shinyBinding, bindingDef, "onValueChange");
+      delegateMethod(shinyBinding, bindingDef, "onValueError");
+      delegateMethod(shinyBinding, bindingDef, "renderError");
+      delegateMethod(shinyBinding, bindingDef, "clearError");
+      delegateMethod(shinyBinding, bindingDef, "showProgress");
+
+      // The find, renderValue, and resize are handled differently, because we
+      // want to actually decorate the behavior of the bindingDef methods.
+
+      shinyBinding.find = function(scope) {
+        var results = bindingDef.find(scope);
+
+        // Only return elements that are Shiny outputs, not static ones
+        var dynamicResults = results.filter(".html-widget-output");
+
+        // It's possible that whatever caused Shiny to think there might be
+        // new dynamic outputs, also caused there to be new static outputs.
+        // Since there might be lots of different htmlwidgets bindings, we
+        // schedule execution for later--no need to staticRender multiple
+        // times.
+        if (results.length !== dynamicResults.length)
+          scheduleStaticRender();
+
+        return dynamicResults;
+      };
+
+      // Wrap renderValue to handle initialization, which unfortunately isn't
+      // supported natively by Shiny at the time of this writing.
+
+      shinyBinding.renderValue = function(el, data) {
+        Shiny.renderDependencies(data.deps);
+        // Resolve strings marked as javascript literals to objects
+        if (!(data.evals instanceof Array)) data.evals = [data.evals];
+        for (var i = 0; data.evals && i < data.evals.length; i++) {
+          window.HTMLWidgets.evaluateStringMember(data.x, data.evals[i]);
+        }
+        if (!bindingDef.renderOnNullValue) {
+          if (data.x === null) {
+            el.style.visibility = "hidden";
+            return;
+          } else {
+            el.style.visibility = "inherit";
+          }
+        }
+        if (!elementData(el, "initialized")) {
+          initSizing(el);
+
+          elementData(el, "initialized", true);
+          if (bindingDef.initialize) {
+            var rect = el.getBoundingClientRect();
+            var result = bindingDef.initialize(el, rect.width, rect.height);
+            elementData(el, "init_result", result);
+          }
+        }
+        bindingDef.renderValue(el, data.x, elementData(el, "init_result"));
+        evalAndRun(data.jsHooks.render, elementData(el, "init_result"), [el, data.x]);
+      };
+
+      // Only override resize if bindingDef implements it
+      if (bindingDef.resize) {
+        shinyBinding.resize = function(el, width, height) {
+          // Shiny can call resize before initialize/renderValue have been
+          // called, which doesn't make sense for widgets.
+          if (elementData(el, "initialized")) {
+            bindingDef.resize(el, width, height, elementData(el, "init_result"));
+          }
+        };
+      }
+
+      Shiny.outputBindings.register(shinyBinding, bindingDef.name);
+    }
+  };
+
+  var scheduleStaticRenderTimerId = null;
+  function scheduleStaticRender() {
+    if (!scheduleStaticRenderTimerId) {
+      scheduleStaticRenderTimerId = setTimeout(function() {
+        scheduleStaticRenderTimerId = null;
+        window.HTMLWidgets.staticRender();
+      }, 1);
+    }
+  }
+
+  // Render static widgets after the document finishes loading
+  // Statically render all elements that are of this widget's class
+  window.HTMLWidgets.staticRender = function() {
+    var bindings = window.HTMLWidgets.widgets || [];
+    forEach(bindings, function(binding) {
+      var matches = binding.find(document.documentElement);
+      forEach(matches, function(el) {
+        var sizeObj = initSizing(el, binding);
+
+        var getSize = function(el) {
+          if (sizeObj) {
+            return {w: sizeObj.getWidth(), h: sizeObj.getHeight()}
+          } else {
+            var rect = el.getBoundingClientRect();
+            return {w: rect.width, h: rect.height}
+          }
+        };
+
+        if (hasClass(el, "html-widget-static-bound"))
+          return;
+        el.className = el.className + " html-widget-static-bound";
+
+        var initResult;
+        if (binding.initialize) {
+          var size = getSize(el);
+          initResult = binding.initialize(el, size.w, size.h);
+          elementData(el, "init_result", initResult);
+        }
+
+        if (binding.resize) {
+          var lastSize = getSize(el);
+          var resizeHandler = function(e) {
+            var size = getSize(el);
+            if (size.w === 0 && size.h === 0)
+              return;
+            if (size.w === lastSize.w && size.h === lastSize.h)
+              return;
+            lastSize = size;
+            binding.resize(el, size.w, size.h, initResult);
+          };
+
+          on(window, "resize", resizeHandler);
+
+          // This is needed for cases where we're running in a Shiny
+          // app, but the widget itself is not a Shiny output, but
+          // rather a simple static widget. One example of this is
+          // an rmarkdown document that has runtime:shiny and widget
+          // that isn't in a render function. Shiny only knows to
+          // call resize handlers for Shiny outputs, not for static
+          // widgets, so we do it ourselves.
+          if (window.jQuery) {
+            window.jQuery(document).on(
+              "shown.htmlwidgets shown.bs.tab.htmlwidgets shown.bs.collapse.htmlwidgets",
+              resizeHandler
+            );
+            window.jQuery(document).on(
+              "hidden.htmlwidgets hidden.bs.tab.htmlwidgets hidden.bs.collapse.htmlwidgets",
+              resizeHandler
+            );
+          }
+
+          // This is needed for the specific case of ioslides, which
+          // flips slides between display:none and display:block.
+          // Ideally we would not have to have ioslide-specific code
+          // here, but rather have ioslides raise a generic event,
+          // but the rmarkdown package just went to CRAN so the
+          // window to getting that fixed may be long.
+          if (window.addEventListener) {
+            // It's OK to limit this to window.addEventListener
+            // browsers because ioslides itself only supports
+            // such browsers.
+            on(document, "slideenter", resizeHandler);
+            on(document, "slideleave", resizeHandler);
+          }
+        }
+
+        var scriptData = document.querySelector("script[data-for='" + el.id + "'][type='application/json']");
+        if (scriptData) {
+          var data = JSON.parse(scriptData.textContent || scriptData.text);
+          // Resolve strings marked as javascript literals to objects
+          if (!(data.evals instanceof Array)) data.evals = [data.evals];
+          for (var k = 0; data.evals && k < data.evals.length; k++) {
+            window.HTMLWidgets.evaluateStringMember(data.x, data.evals[k]);
+          }
+          binding.renderValue(el, data.x, initResult);
+          evalAndRun(data.jsHooks.render, initResult, [el, data.x]);
+        }
+      });
+    });
+
+    invokePostRenderHandlers();
+  }
+
+
+  function has_jQuery3() {
+    if (!window.jQuery) {
+      return false;
+    }
+    var $version = window.jQuery.fn.jquery;
+    var $major_version = parseInt($version.split(".")[0]);
+    return $major_version >= 3;
+  }
+
+  /*
+  / Shiny 1.4 bumped jQuery from 1.x to 3.x which means jQuery's
+  / on-ready handler (i.e., $(fn)) is now asyncronous (i.e., it now
+  / really means $(setTimeout(fn)).
+  / https://jquery.com/upgrade-guide/3.0/#breaking-change-document-ready-handlers-are-now-asynchronous
+  /
+  / Since Shiny uses $() to schedule initShiny, shiny>=1.4 calls initShiny
+  / one tick later than it did before, which means staticRender() is
+  / called renderValue() earlier than (advanced) widget authors might be expecting.
+  / https://github.com/rstudio/shiny/issues/2630
+  /
+  / For a concrete example, leaflet has some methods (e.g., updateBounds)
+  / which reference Shiny methods registered in initShiny (e.g., setInputValue).
+  / Since leaflet is privy to this life-cycle, it knows to use setTimeout() to
+  / delay execution of those methods (until Shiny methods are ready)
+  / https://github.com/rstudio/leaflet/blob/18ec981/javascript/src/index.js#L266-L268
+  /
+  / Ideally widget authors wouldn't need to use this setTimeout() hack that
+  / leaflet uses to call Shiny methods on a staticRender(). In the long run,
+  / the logic initShiny should be broken up so that method registration happens
+  / right away, but binding happens later.
+  */
+  function maybeStaticRenderLater() {
+    if (shinyMode && has_jQuery3()) {
+      window.jQuery(window.HTMLWidgets.staticRender);
+    } else {
+      window.HTMLWidgets.staticRender();
+    }
+  }
+
+  if (document.addEventListener) {
+    document.addEventListener("DOMContentLoaded", function() {
+      document.removeEventListener("DOMContentLoaded", arguments.callee, false);
+      maybeStaticRenderLater();
+    }, false);
+  } else if (document.attachEvent) {
+    document.attachEvent("onreadystatechange", function() {
+      if (document.readyState === "complete") {
+        document.detachEvent("onreadystatechange", arguments.callee);
+        maybeStaticRenderLater();
+      }
+    });
+  }
+
+
+  window.HTMLWidgets.getAttachmentUrl = function(depname, key) {
+    // If no key, default to the first item
+    if (typeof(key) === "undefined")
+      key = 1;
+
+    var link = document.getElementById(depname + "-" + key + "-attachment");
+    if (!link) {
+      throw new Error("Attachment " + depname + "/" + key + " not found in document");
+    }
+    return link.getAttribute("href");
+  };
+
+  window.HTMLWidgets.dataframeToD3 = function(df) {
+    var names = [];
+    var length;
+    for (var name in df) {
+        if (df.hasOwnProperty(name))
+            names.push(name);
+        if (typeof(df[name]) !== "object" || typeof(df[name].length) === "undefined") {
+            throw new Error("All fields must be arrays");
+        } else if (typeof(length) !== "undefined" && length !== df[name].length) {
+            throw new Error("All fields must be arrays of the same length");
+        }
+        length = df[name].length;
+    }
+    var results = [];
+    var item;
+    for (var row = 0; row < length; row++) {
+        item = {};
+        for (var col = 0; col < names.length; col++) {
+            item[names[col]] = df[names[col]][row];
+        }
+        results.push(item);
+    }
+    return results;
+  };
+
+  window.HTMLWidgets.transposeArray2D = function(array) {
+      if (array.length === 0) return array;
+      var newArray = array[0].map(function(col, i) {
+          return array.map(function(row) {
+              return row[i]
+          })
+      });
+      return newArray;
+  };
+  // Split value at splitChar, but allow splitChar to be escaped
+  // using escapeChar. Any other characters escaped by escapeChar
+  // will be included as usual (including escapeChar itself).
+  function splitWithEscape(value, splitChar, escapeChar) {
+    var results = [];
+    var escapeMode = false;
+    var currentResult = "";
+    for (var pos = 0; pos < value.length; pos++) {
+      if (!escapeMode) {
+        if (value[pos] === splitChar) {
+          results.push(currentResult);
+          currentResult = "";
+        } else if (value[pos] === escapeChar) {
+          escapeMode = true;
+        } else {
+          currentResult += value[pos];
+        }
+      } else {
+        currentResult += value[pos];
+        escapeMode = false;
+      }
+    }
+    if (currentResult !== "") {
+      results.push(currentResult);
+    }
+    return results;
+  }
+  // Function authored by Yihui/JJ Allaire
+  window.HTMLWidgets.evaluateStringMember = function(o, member) {
+    var parts = splitWithEscape(member, '.', '\\');
+    for (var i = 0, l = parts.length; i < l; i++) {
+      var part = parts[i];
+      // part may be a character or 'numeric' member name
+      if (o !== null && typeof o === "object" && part in o) {
+        if (i == (l - 1)) { // if we are at the end of the line then evalulate
+          if (typeof o[part] === "string")
+            o[part] = tryEval(o[part]);
+        } else { // otherwise continue to next embedded object
+          o = o[part];
+        }
+      }
+    }
+  };
+
+  // Retrieve the HTMLWidget instance (i.e. the return value of an
+  // HTMLWidget binding's initialize() or factory() function)
+  // associated with an element, or null if none.
+  window.HTMLWidgets.getInstance = function(el) {
+    return elementData(el, "init_result");
+  };
+
+  // Finds the first element in the scope that matches the selector,
+  // and returns the HTMLWidget instance (i.e. the return value of
+  // an HTMLWidget binding's initialize() or factory() function)
+  // associated with that element, if any. If no element matches the
+  // selector, or the first matching element has no HTMLWidget
+  // instance associated with it, then null is returned.
+  //
+  // The scope argument is optional, and defaults to window.document.
+  window.HTMLWidgets.find = function(scope, selector) {
+    if (arguments.length == 1) {
+      selector = scope;
+      scope = document;
+    }
+
+    var el = scope.querySelector(selector);
+    if (el === null) {
+      return null;
+    } else {
+      return window.HTMLWidgets.getInstance(el);
+    }
+  };
+
+  // Finds all elements in the scope that match the selector, and
+  // returns the HTMLWidget instances (i.e. the return values of
+  // an HTMLWidget binding's initialize() or factory() function)
+  // associated with the elements, in an array. If elements that
+  // match the selector don't have an associated HTMLWidget
+  // instance, the returned array will contain nulls.
+  //
+  // The scope argument is optional, and defaults to window.document.
+  window.HTMLWidgets.findAll = function(scope, selector) {
+    if (arguments.length == 1) {
+      selector = scope;
+      scope = document;
+    }
+
+    var nodes = scope.querySelectorAll(selector);
+    var results = [];
+    for (var i = 0; i < nodes.length; i++) {
+      results.push(window.HTMLWidgets.getInstance(nodes[i]));
+    }
+    return results;
+  };
+
+  var postRenderHandlers = [];
+  function invokePostRenderHandlers() {
+    while (postRenderHandlers.length) {
+      var handler = postRenderHandlers.shift();
+      if (handler) {
+        handler();
+      }
+    }
+  }
+
+  // Register the given callback function to be invoked after the
+  // next time static widgets are rendered.
+  window.HTMLWidgets.addPostRenderHandler = function(callback) {
+    postRenderHandlers.push(callback);
+  };
+
+  // Takes a new-style instance-bound definition, and returns an
+  // old-style class-bound definition. This saves us from having
+  // to rewrite all the logic in this file to accomodate both
+  // types of definitions.
+  function createLegacyDefinitionAdapter(defn) {
+    var result = {
+      name: defn.name,
+      type: defn.type,
+      initialize: function(el, width, height) {
+        return defn.factory(el, width, height);
+      },
+      renderValue: function(el, x, instance) {
+        return instance.renderValue(x);
+      },
+      resize: function(el, width, height, instance) {
+        return instance.resize(width, height);
+      }
+    };
+
+    if (defn.find)
+      result.find = defn.find;
+    if (defn.renderError)
+      result.renderError = defn.renderError;
+    if (defn.clearError)
+      result.clearError = defn.clearError;
+
+    return result;
+  }
+})();
+</script>
+<style type="text/css">#wcLabel {position: absolute;border: 2px solid #fff;box-shadow: 0 0 4px 0 #008;padding: 2px;pointer-events: none; }#wcSpan {position: absolute;top: 100%;left: 0;background-color: rgba(255, 255, 255, 0.8);color: #333;margin-top: 6px;padding: 0 0.5em;border-radius: 0.5em;white-space: nowrap; }</style>
+<script>/*!
+ * wordcloud2.js
+ * http://timdream.org/wordcloud2.js/
+ *
+ * Copyright 2011 - 2013 Tim Chien
+ * Released under the MIT license
+ */
+
+'use strict';
+
+// setImmediate
+if (!window.setImmediate) {
+  window.setImmediate = (function setupSetImmediate() {
+    return window.msSetImmediate ||
+    window.webkitSetImmediate ||
+    window.mozSetImmediate ||
+    window.oSetImmediate ||
+    (function setupSetZeroTimeout() {
+      if (!window.postMessage || !window.addEventListener) {
+        return null;
+      }
+
+      var callbacks = [undefined];
+      var message = 'zero-timeout-message';
+
+      // Like setTimeout, but only takes a function argument.  There's
+      // no time argument (always zero) and no arguments (you have to
+      // use a closure).
+      var setZeroTimeout = function setZeroTimeout(callback) {
+        var id = callbacks.length;
+        callbacks.push(callback);
+        window.postMessage(message + id.toString(36), '*');
+
+        return id;
+      };
+
+      window.addEventListener('message', function setZeroTimeoutMessage(evt) {
+        // Skipping checking event source, retarded IE confused this window
+        // object with another in the presence of iframe
+        if (typeof evt.data !== 'string' ||
+            evt.data.substr(0, message.length) !== message/* ||
+            evt.source !== window */) {
+          return;
+        }
+
+        evt.stopImmediatePropagation();
+
+        var id = parseInt(evt.data.substr(message.length), 36);
+        if (!callbacks[id]) {
+          return;
+        }
+
+        callbacks[id]();
+        callbacks[id] = undefined;
+      }, true);
+
+      /* specify clearImmediate() here since we need the scope */
+      window.clearImmediate = function clearZeroTimeout(id) {
+        if (!callbacks[id]) {
+          return;
+        }
+
+        callbacks[id] = undefined;
+      };
+
+      return setZeroTimeout;
+    })() ||
+    // fallback
+    function setImmediateFallback(fn) {
+      window.setTimeout(fn, 0);
+    };
+  })();
+}
+
+if (!window.clearImmediate) {
+  window.clearImmediate = (function setupClearImmediate() {
+    return window.msClearImmediate ||
+    window.webkitClearImmediate ||
+    window.mozClearImmediate ||
+    window.oClearImmediate ||
+    // "clearZeroTimeout" is implement on the previous block ||
+    // fallback
+    function clearImmediateFallback(timer) {
+      window.clearTimeout(timer);
+    };
+  })();
+}
+
+(function(global) {
+
+  // Check if WordCloud can run on this browser
+  var isSupported = (function isSupported() {
+    var canvas = document.createElement('canvas');
+    if (!canvas || !canvas.getContext) {
+      return false;
+    }
+
+    var ctx = canvas.getContext('2d');
+    if (!ctx.getImageData) {
+      return false;
+    }
+    if (!ctx.fillText) {
+      return false;
+    }
+
+    if (!Array.prototype.some) {
+      return false;
+    }
+    if (!Array.prototype.push) {
+      return false;
+    }
+
+    return true;
+  }());
+
+  // Find out if the browser impose minium font size by
+  // drawing small texts on a canvas and measure it's width.
+  var minFontSize = (function getMinFontSize() {
+    if (!isSupported) {
+      return;
+    }
+
+    var ctx = document.createElement('canvas').getContext('2d');
+
+    // start from 20
+    var size = 20;
+
+    // two sizes to measure
+    var hanWidth, mWidth;
+
+    while (size) {
+      ctx.font = size.toString(10) + 'px sans-serif';
+      if ((ctx.measureText('\uFF37').width === hanWidth) &&
+          (ctx.measureText('m').width) === mWidth) {
+        return (size + 1);
+      }
+
+      hanWidth = ctx.measureText('\uFF37').width;
+      mWidth = ctx.measureText('m').width;
+
+      size--;
+    }
+
+    return 0;
+  })();
+
+  // Based on http://jsfromhell.com/array/shuffle
+  var shuffleArray = function shuffleArray(arr) {
+    for (var j, x, i = arr.length; i;
+      j = Math.floor(Math.random() * i),
+      x = arr[--i], arr[i] = arr[j],
+      arr[j] = x) {}
+    return arr;
+  };
+
+  var WordCloud = function WordCloud(elements, options) {
+    if (!isSupported) {
+      return;
+    }
+
+    if (!Array.isArray(elements)) {
+      elements = [elements];
+    }
+
+    elements.forEach(function(el, i) {
+      if (typeof el === 'string') {
+        elements[i] = document.getElementById(el);
+        if (!elements[i]) {
+          throw 'The element id specified is not found.';
+        }
+      } else if (!el.tagName && !el.appendChild) {
+        throw 'You must pass valid HTML elements, or ID of the element.';
+      }
+    });
+
+    /* Default values to be overwritten by options object */
+    var settings = {
+      list: [],
+      fontFamily: '"Trebuchet MS", "Heiti TC", "微軟正黑體", ' +
+                  '"Arial Unicode MS", "Droid Fallback Sans", sans-serif',
+      fontWeight: 'normal',
+      color: 'random-dark',
+      minSize: 0, // 0 to disable
+      weightFactor: 1,
+      clearCanvas: true,
+      backgroundColor: '#fff',  // opaque white = rgba(255, 255, 255, 1)
+
+      gridSize: 8,
+      origin: null,
+
+      drawMask: false,
+      maskColor: 'rgba(255,0,0,0.3)',
+      maskGapWidth: 0.3,
+
+      wait: 0,
+      abortThreshold: 0, // disabled
+      abort: function noop() {},
+
+      minRotation: - Math.PI / 2,
+      maxRotation: Math.PI / 2,
+
+      shuffle: true,
+      rotateRatio: 0.1,
+
+      shape: 'circle',
+      ellipticity: 0.65,
+
+      classes: null,
+
+      hover: null,
+      click: null
+    };
+
+    if (options) {
+      for (var key in options) {
+        if (key in settings) {
+          settings[key] = options[key];
+        }
+      }
+    }
+
+    /* Convert weightFactor into a function */
+    if (typeof settings.weightFactor !== 'function') {
+      var factor = settings.weightFactor;
+      settings.weightFactor = function weightFactor(pt) {
+        return pt * factor; //in px
+      };
+    }
+
+    /* Convert shape into a function */
+    if (typeof settings.shape !== 'function') {
+      switch (settings.shape) {
+        case 'circle':
+        /* falls through */
+        default:
+          // 'circle' is the default and a shortcut in the code loop.
+          settings.shape = 'circle';
+          break;
+
+        case 'cardioid':
+          settings.shape = function shapeCardioid(theta) {
+            return 1 - Math.sin(theta);
+          };
+          break;
+
+        /*
+
+        To work out an X-gon, one has to calculate "m",
+        where 1/(cos(2*PI/X)+m*sin(2*PI/X)) = 1/(cos(0)+m*sin(0))
+        http://www.wolframalpha.com/input/?i=1%2F%28cos%282*PI%2FX%29%2Bm*sin%28
+        2*PI%2FX%29%29+%3D+1%2F%28cos%280%29%2Bm*sin%280%29%29
+
+        Copy the solution into polar equation r = 1/(cos(t') + m*sin(t'))
+        where t' equals to mod(t, 2PI/X);
+
+        */
+
+        case 'diamond':
+        case 'square':
+          // http://www.wolframalpha.com/input/?i=plot+r+%3D+1%2F%28cos%28mod+
+          // %28t%2C+PI%2F2%29%29%2Bsin%28mod+%28t%2C+PI%2F2%29%29%29%2C+t+%3D
+          // +0+..+2*PI
+          settings.shape = function shapeSquare(theta) {
+            var thetaPrime = theta % (2 * Math.PI / 4);
+            return 1 / (Math.cos(thetaPrime) + Math.sin(thetaPrime));
+          };
+          break;
+
+        case 'triangle-forward':
+          // http://www.wolframalpha.com/input/?i=plot+r+%3D+1%2F%28cos%28mod+
+          // %28t%2C+2*PI%2F3%29%29%2Bsqrt%283%29sin%28mod+%28t%2C+2*PI%2F3%29
+          // %29%29%2C+t+%3D+0+..+2*PI
+          settings.shape = function shapeTriangle(theta) {
+            var thetaPrime = theta % (2 * Math.PI / 3);
+            return 1 / (Math.cos(thetaPrime) +
+                        Math.sqrt(3) * Math.sin(thetaPrime));
+          };
+          break;
+
+        case 'triangle':
+        case 'triangle-upright':
+          settings.shape = function shapeTriangle(theta) {
+            var thetaPrime = (theta + Math.PI * 3 / 2) % (2 * Math.PI / 3);
+            return 1 / (Math.cos(thetaPrime) +
+                        Math.sqrt(3) * Math.sin(thetaPrime));
+          };
+          break;
+
+        case 'pentagon':
+          settings.shape = function shapePentagon(theta) {
+            var thetaPrime = (theta + 0.955) % (2 * Math.PI / 5);
+            return 1 / (Math.cos(thetaPrime) +
+                        0.726543 * Math.sin(thetaPrime));
+          };
+          break;
+
+        case 'star':
+          settings.shape = function shapeStar(theta) {
+            var thetaPrime = (theta + 0.955) % (2 * Math.PI / 10);
+            if ((theta + 0.955) % (2 * Math.PI / 5) - (2 * Math.PI / 10) >= 0) {
+              return 1 / (Math.cos((2 * Math.PI / 10) - thetaPrime) +
+                          3.07768 * Math.sin((2 * Math.PI / 10) - thetaPrime));
+            } else {
+              return 1 / (Math.cos(thetaPrime) +
+                          3.07768 * Math.sin(thetaPrime));
+            }
+          };
+          break;
+      }
+    }
+
+    /* Make sure gridSize is a whole number and is not smaller than 4px */
+    settings.gridSize = Math.max(Math.floor(settings.gridSize), 4);
+
+    /* shorthand */
+    var g = settings.gridSize;
+    var maskRectWidth = g - settings.maskGapWidth;
+
+    /* normalize rotation settings */
+    var rotationRange = Math.abs(settings.maxRotation - settings.minRotation);
+    var minRotation = Math.min(settings.maxRotation, settings.minRotation);
+
+    /* information/object available to all functions, set when start() */
+    var grid, // 2d array containing filling information
+      ngx, ngy, // width and height of the grid
+      center, // position of the center of the cloud
+      maxRadius;
+
+    /* timestamp for measuring each putWord() action */
+    var escapeTime;
+
+    /* function for getting the color of the text */
+    var getTextColor;
+    function random_hsl_color(min, max) {
+      return 'hsl(' +
+        (Math.random() * 360).toFixed() + ',' +
+        (Math.random() * 30 + 70).toFixed() + '%,' +
+        (Math.random() * (max - min) + min).toFixed() + '%)';
+    }
+    switch (settings.color) {
+      case 'random-dark':
+        getTextColor = function getRandomDarkColor() {
+          return random_hsl_color(10, 50);
+        };
+        break;
+
+      case 'random-light':
+        getTextColor = function getRandomLightColor() {
+          return random_hsl_color(50, 90);
+        };
+        break;
+
+      default:
+        if (typeof settings.color === 'function') {
+          getTextColor = settings.color;
+        }
+        break;
+    }
+
+    /* function for getting the classes of the text */
+    var getTextClasses = null;
+    if (typeof settings.classes === 'function') {
+      getTextClasses = settings.classes;
+    }
+
+    /* Interactive */
+    var interactive = false;
+    var infoGrid = [];
+    var hovered;
+
+    var getInfoGridFromMouseTouchEvent =
+    function getInfoGridFromMouseTouchEvent(evt) {
+      var canvas = evt.currentTarget;
+      var rect = canvas.getBoundingClientRect();
+      var clientX;
+      var clientY;
+      /** Detect if touches are available */
+      if (evt.touches) {
+        clientX = evt.touches[0].clientX;
+        clientY = evt.touches[0].clientY;
+      } else {
+        clientX = evt.clientX;
+        clientY = evt.clientY;
+      }
+      var eventX = clientX - rect.left;
+      var eventY = clientY - rect.top;
+
+      var x = Math.floor(eventX * ((canvas.width / rect.width) || 1) / g);
+      var y = Math.floor(eventY * ((canvas.height / rect.height) || 1) / g);
+
+      return infoGrid[x][y];
+    };
+
+    var wordcloudhover = function wordcloudhover(evt) {
+      var info = getInfoGridFromMouseTouchEvent(evt);
+
+      if (hovered === info) {
+        return;
+      }
+
+      hovered = info;
+      if (!info) {
+        settings.hover(undefined, undefined, evt);
+
+        return;
+      }
+
+      settings.hover(info.item, info.dimension, evt);
+
+    };
+
+    var wordcloudclick = function wordcloudclick(evt) {
+      var info = getInfoGridFromMouseTouchEvent(evt);
+      if (!info) {
+        return;
+      }
+
+      settings.click(info.item, info.dimension, evt);
+      evt.preventDefault();
+    };
+
+    /* Get points on the grid for a given radius away from the center */
+    var pointsAtRadius = [];
+    var getPointsAtRadius = function getPointsAtRadius(radius) {
+      if (pointsAtRadius[radius]) {
+        return pointsAtRadius[radius];
+      }
+
+      // Look for these number of points on each radius
+      var T = radius * 8;
+
+      // Getting all the points at this radius
+      var t = T;
+      var points = [];
+
+      if (radius === 0) {
+        points.push([center[0], center[1], 0]);
+      }
+
+      while (t--) {
+        // distort the radius to put the cloud in shape
+        var rx = 1;
+        if (settings.shape !== 'circle') {
+          rx = settings.shape(t / T * 2 * Math.PI); // 0 to 1
+        }
+
+        // Push [x, y, t]; t is used solely for getTextColor()
+        points.push([
+          center[0] + radius * rx * Math.cos(-t / T * 2 * Math.PI),
+          center[1] + radius * rx * Math.sin(-t / T * 2 * Math.PI) *
+            settings.ellipticity,
+          t / T * 2 * Math.PI]);
+      }
+
+      pointsAtRadius[radius] = points;
+      return points;
+    };
+
+    /* Return true if we had spent too much time */
+    var exceedTime = function exceedTime() {
+      return ((settings.abortThreshold > 0) &&
+        ((new Date()).getTime() - escapeTime > settings.abortThreshold));
+    };
+
+    /* Get the deg of rotation according to settings, and luck. */
+    var getRotateDeg = function getRotateDeg() {
+      if (settings.rotateRatio === 0) {
+        return 0;
+      }
+
+      if (Math.random() > settings.rotateRatio) {
+        return 0;
+      }
+
+      if (rotationRange === 0) {
+        return minRotation;
+      }
+
+      return minRotation + Math.random() * rotationRange;
+    };
+
+    var getTextInfo = function getTextInfo(word, weight, rotateDeg) {
+      // calculate the acutal font size
+      // fontSize === 0 means weightFactor function wants the text skipped,
+      // and size < minSize means we cannot draw the text.
+      var debug = false;
+      var fontSize = settings.weightFactor(weight);
+      if (fontSize <= settings.minSize) {
+        return false;
+      }
+
+      // Scale factor here is to make sure fillText is not limited by
+      // the minium font size set by browser.
+      // It will always be 1 or 2n.
+      var mu = 1;
+      if (fontSize < minFontSize) {
+        mu = (function calculateScaleFactor() {
+          var mu = 2;
+          while (mu * fontSize < minFontSize) {
+            mu += 2;
+          }
+          return mu;
+        })();
+      }
+
+      var fcanvas = document.createElement('canvas');
+      var fctx = fcanvas.getContext('2d', { willReadFrequently: true });
+
+      fctx.font = settings.fontWeight + ' ' +
+        (fontSize * mu).toString(10) + 'px ' + settings.fontFamily;
+
+      // Estimate the dimension of the text with measureText().
+      var fw = fctx.measureText(word).width / mu;
+      var fh = Math.max(fontSize * mu,
+                        fctx.measureText('m').width,
+                        fctx.measureText('\uFF37').width) / mu;
+
+      // Create a boundary box that is larger than our estimates,
+      // so text don't get cut of (it sill might)
+      var boxWidth = fw + fh * 2;
+      var boxHeight = fh * 3;
+      var fgw = Math.ceil(boxWidth / g);
+      var fgh = Math.ceil(boxHeight / g);
+      boxWidth = fgw * g;
+      boxHeight = fgh * g;
+
+      // Calculate the proper offsets to make the text centered at
+      // the preferred position.
+
+      // This is simply half of the width.
+      var fillTextOffsetX = - fw / 2;
+      // Instead of moving the box to the exact middle of the preferred
+      // position, for Y-offset we move 0.4 instead, so Latin alphabets look
+      // vertical centered.
+      var fillTextOffsetY = - fh * 0.4;
+
+      // Calculate the actual dimension of the canvas, considering the rotation.
+      var cgh = Math.ceil((boxWidth * Math.abs(Math.sin(rotateDeg)) +
+                           boxHeight * Math.abs(Math.cos(rotateDeg))) / g);
+      var cgw = Math.ceil((boxWidth * Math.abs(Math.cos(rotateDeg)) +
+                           boxHeight * Math.abs(Math.sin(rotateDeg))) / g);
+      var width = cgw * g;
+      var height = cgh * g;
+
+      fcanvas.setAttribute('width', width);
+      fcanvas.setAttribute('height', height);
+
+      if (debug) {
+        // Attach fcanvas to the DOM
+        document.body.appendChild(fcanvas);
+        // Save it's state so that we could restore and draw the grid correctly.
+        fctx.save();
+      }
+
+      // Scale the canvas with |mu|.
+      fctx.scale(1 / mu, 1 / mu);
+      fctx.translate(width * mu / 2, height * mu / 2);
+      fctx.rotate(- rotateDeg);
+
+      // Once the width/height is set, ctx info will be reset.
+      // Set it again here.
+      fctx.font = settings.fontWeight + ' ' +
+        (fontSize * mu).toString(10) + 'px ' + settings.fontFamily;
+
+      // Fill the text into the fcanvas.
+      // XXX: We cannot because textBaseline = 'top' here because
+      // Firefox and Chrome uses different default line-height for canvas.
+      // Please read https://bugzil.la/737852#c6.
+      // Here, we use textBaseline = 'middle' and draw the text at exactly
+      // 0.5 * fontSize lower.
+      fctx.fillStyle = '#000';
+      fctx.textBaseline = 'middle';
+      fctx.fillText(word, fillTextOffsetX * mu,
+                    (fillTextOffsetY + fontSize * 0.5) * mu);
+
+      // Get the pixels of the text
+      var imageData = fctx.getImageData(0, 0, width, height).data;
+
+      if (exceedTime()) {
+        return false;
+      }
+
+      if (debug) {
+        // Draw the box of the original estimation
+        fctx.strokeRect(fillTextOffsetX * mu,
+                        fillTextOffsetY, fw * mu, fh * mu);
+        fctx.restore();
+      }
+
+      // Read the pixels and save the information to the occupied array
+      var occupied = [];
+      var gx = cgw, gy, x, y;
+      var bounds = [cgh / 2, cgw / 2, cgh / 2, cgw / 2];
+      while (gx--) {
+        gy = cgh;
+        while (gy--) {
+          y = g;
+          singleGridLoop: {
+            while (y--) {
+              x = g;
+              while (x--) {
+                if (imageData[((gy * g + y) * width +
+                               (gx * g + x)) * 4 + 3]) {
+                  occupied.push([gx, gy]);
+
+                  if (gx < bounds[3]) {
+                    bounds[3] = gx;
+                  }
+                  if (gx > bounds[1]) {
+                    bounds[1] = gx;
+                  }
+                  if (gy < bounds[0]) {
+                    bounds[0] = gy;
+                  }
+                  if (gy > bounds[2]) {
+                    bounds[2] = gy;
+                  }
+
+                  if (debug) {
+                    fctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+                    fctx.fillRect(gx * g, gy * g, g - 0.5, g - 0.5);
+                  }
+                  break singleGridLoop;
+                }
+              }
+            }
+            if (debug) {
+              fctx.fillStyle = 'rgba(0, 0, 255, 0.5)';
+              fctx.fillRect(gx * g, gy * g, g - 0.5, g - 0.5);
+            }
+          }
+        }
+      }
+
+      if (debug) {
+        fctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
+        fctx.fillRect(bounds[3] * g,
+                      bounds[0] * g,
+                      (bounds[1] - bounds[3] + 1) * g,
+                      (bounds[2] - bounds[0] + 1) * g);
+      }
+
+      // Return information needed to create the text on the real canvas
+      return {
+        mu: mu,
+        occupied: occupied,
+        bounds: bounds,
+        gw: cgw,
+        gh: cgh,
+        fillTextOffsetX: fillTextOffsetX,
+        fillTextOffsetY: fillTextOffsetY,
+        fillTextWidth: fw,
+        fillTextHeight: fh,
+        fontSize: fontSize
+      };
+    };
+
+    /* Determine if there is room available in the given dimension */
+    var canFitText = function canFitText(gx, gy, gw, gh, occupied) {
+      // Go through the occupied points,
+      // return false if the space is not available.
+      var i = occupied.length;
+      while (i--) {
+        var px = gx + occupied[i][0];
+        var py = gy + occupied[i][1];
+
+        if (px >= ngx || py >= ngy || px < 0 || py < 0 || !grid[px][py]) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    /* Actually draw the text on the grid */
+    var drawText = function drawText(gx, gy, info, word, weight,
+                                     distance, theta, rotateDeg, attributes) {
+
+      var fontSize = info.fontSize;
+      var color;
+      if (getTextColor) {
+        color = getTextColor(word, weight, fontSize, distance, theta);
+      } else if (settings.color instanceof Array) {
+        color = settings.color.shift() || 'black'; // pass a array in setting, default 'black'
+      } else {
+        color = settings.color;
+      }
+
+      var classes;
+      if (getTextClasses) {
+        classes = getTextClasses(word, weight, fontSize, distance, theta);
+      } else {
+        classes = settings.classes;
+      }
+
+      var dimension;
+      var bounds = info.bounds;
+      dimension = {
+        x: (gx + bounds[3]) * g,
+        y: (gy + bounds[0]) * g,
+        w: (bounds[1] - bounds[3] + 1) * g,
+        h: (bounds[2] - bounds[0] + 1) * g
+      };
+
+      elements.forEach(function(el) {
+        if (el.getContext) {
+          var ctx = el.getContext('2d');
+          var mu = info.mu;
+
+          // Save the current state before messing it
+          ctx.save();
+          ctx.scale(1 / mu, 1 / mu);
+
+          ctx.font = settings.fontWeight + ' ' +
+                     (fontSize * mu).toString(10) + 'px ' + settings.fontFamily;
+          ctx.fillStyle = color;
+
+          // Translate the canvas position to the origin coordinate of where
+          // the text should be put.
+          ctx.translate((gx + info.gw / 2) * g * mu,
+                        (gy + info.gh / 2) * g * mu);
+
+          if (rotateDeg !== 0) {
+            ctx.rotate(- rotateDeg);
+          }
+
+          // Finally, fill the text.
+
+          // XXX: We cannot because textBaseline = 'top' here because
+          // Firefox and Chrome uses different default line-height for canvas.
+          // Please read https://bugzil.la/737852#c6.
+          // Here, we use textBaseline = 'middle' and draw the text at exactly
+          // 0.5 * fontSize lower.
+          ctx.textBaseline = 'middle';
+          ctx.fillText(word, info.fillTextOffsetX * mu,
+                             (info.fillTextOffsetY + fontSize * 0.5) * mu);
+
+          // The below box is always matches how <span>s are positioned
+          /* ctx.strokeRect(info.fillTextOffsetX, info.fillTextOffsetY,
+            info.fillTextWidth, info.fillTextHeight); */
+
+          // Restore the state.
+          ctx.restore();
+        } else {
+          // drawText on DIV element
+          var span = document.createElement('span');
+          var transformRule = '';
+          transformRule = 'rotate(' + (- rotateDeg / Math.PI * 180) + 'deg) ';
+          if (info.mu !== 1) {
+            transformRule +=
+              'translateX(-' + (info.fillTextWidth / 4) + 'px) ' +
+              'scale(' + (1 / info.mu) + ')';
+          }
+          var styleRules = {
+            'position': 'absolute',
+            'display': 'block',
+            'font': settings.fontWeight + ' ' +
+                    (fontSize * info.mu) + 'px ' + settings.fontFamily,
+            'left': ((gx + info.gw / 2) * g + info.fillTextOffsetX) + 'px',
+            'top': ((gy + info.gh / 2) * g + info.fillTextOffsetY) + 'px',
+            'width': info.fillTextWidth + 'px',
+            'height': info.fillTextHeight + 'px',
+            'lineHeight': fontSize + 'px',
+            'whiteSpace': 'nowrap',
+            'transform': transformRule,
+            'webkitTransform': transformRule,
+            'msTransform': transformRule,
+            'transformOrigin': '50% 40%',
+            'webkitTransformOrigin': '50% 40%',
+            'msTransformOrigin': '50% 40%'
+          };
+          if (color) {
+            styleRules.color = color;
+          }
+          span.textContent = word;
+          for (var cssProp in styleRules) {
+            span.style[cssProp] = styleRules[cssProp];
+          }
+          if (attributes) {
+            for (var attribute in attributes) {
+              span.setAttribute(attribute, attributes[attribute]);
+            }
+          }
+          if (classes) {
+            span.className += classes;
+          }
+          el.appendChild(span);
+        }
+      });
+    };
+
+    /* Help function to updateGrid */
+    var fillGridAt = function fillGridAt(x, y, drawMask, dimension, item) {
+      if (x >= ngx || y >= ngy || x < 0 || y < 0) {
+        return;
+      }
+
+      grid[x][y] = false;
+
+      if (drawMask) {
+        var ctx = elements[0].getContext('2d');
+        ctx.fillRect(x * g, y * g, maskRectWidth, maskRectWidth);
+      }
+
+      if (interactive) {
+        infoGrid[x][y] = { item: item, dimension: dimension };
+      }
+    };
+
+    /* Update the filling information of the given space with occupied points.
+       Draw the mask on the canvas if necessary. */
+    var updateGrid = function updateGrid(gx, gy, gw, gh, info, item) {
+      var occupied = info.occupied;
+      var drawMask = settings.drawMask;
+      var ctx;
+      if (drawMask) {
+        ctx = elements[0].getContext('2d');
+        ctx.save();
+        ctx.fillStyle = settings.maskColor;
+      }
+
+      var dimension;
+      if (interactive) {
+        var bounds = info.bounds;
+        dimension = {
+          x: (gx + bounds[3]) * g,
+          y: (gy + bounds[0]) * g,
+          w: (bounds[1] - bounds[3] + 1) * g,
+          h: (bounds[2] - bounds[0] + 1) * g
+        };
+      }
+
+      var i = occupied.length;
+      while (i--) {
+        fillGridAt(gx + occupied[i][0], gy + occupied[i][1],
+                   drawMask, dimension, item);
+      }
+
+      if (drawMask) {
+        ctx.restore();
+      }
+    };
+
+    /* putWord() processes each item on the list,
+       calculate it's size and determine it's position, and actually
+       put it on the canvas. */
+    var putWord = function putWord(item) {
+      var word, weight, attributes;
+      if (Array.isArray(item)) {
+        word = item[0];
+        weight = item[1];
+      } else {
+        word = item.word;
+        weight = item.weight;
+        attributes = item.attributes;
+      }
+      var rotateDeg = getRotateDeg();
+
+      // get info needed to put the text onto the canvas
+      var info = getTextInfo(word, weight, rotateDeg);
+
+      // not getting the info means we shouldn't be drawing this one.
+      if (!info) {
+        return false;
+      }
+
+      if (exceedTime()) {
+        return false;
+      }
+
+      // Skip the loop if we have already know the bounding box of
+      // word is larger than the canvas.
+      var bounds = info.bounds;
+      if ((bounds[1] - bounds[3] + 1) > ngx ||
+        (bounds[2] - bounds[0] + 1) > ngy) {
+        return false;
+      }
+
+      // Determine the position to put the text by
+      // start looking for the nearest points
+      var r = maxRadius + 1;
+
+      var tryToPutWordAtPoint = function(gxy) {
+        var gx = Math.floor(gxy[0] - info.gw / 2);
+        var gy = Math.floor(gxy[1] - info.gh / 2);
+        var gw = info.gw;
+        var gh = info.gh;
+
+        // If we cannot fit the text at this position, return false
+        // and go to the next position.
+        if (!canFitText(gx, gy, gw, gh, info.occupied)) {
+          return false;
+        }
+
+        // Actually put the text on the canvas
+        drawText(gx, gy, info, word, weight,
+                 (maxRadius - r), gxy[2], rotateDeg, attributes);
+
+        // Mark the spaces on the grid as filled
+        updateGrid(gx, gy, gw, gh, info, item);
+
+        // Return true so some() will stop and also return true.
+        return true;
+      };
+
+      while (r--) {
+        var points = getPointsAtRadius(maxRadius - r);
+
+        if (settings.shuffle) {
+          points = [].concat(points);
+          shuffleArray(points);
+        }
+
+        // Try to fit the words by looking at each point.
+        // array.some() will stop and return true
+        // when putWordAtPoint() returns true.
+        // If all the points returns false, array.some() returns false.
+        var drawn = points.some(tryToPutWordAtPoint);
+
+        if (drawn) {
+          // leave putWord() and return true
+          return true;
+        }
+      }
+      // we tried all distances but text won't fit, return false
+      return false;
+    };
+
+    /* Send DOM event to all elements. Will stop sending event and return
+       if the previous one is canceled (for cancelable events). */
+    var sendEvent = function sendEvent(type, cancelable, detail) {
+      if (cancelable) {
+        return !elements.some(function(el) {
+          var evt = document.createEvent('CustomEvent');
+          evt.initCustomEvent(type, true, cancelable, detail || {});
+          return !el.dispatchEvent(evt);
+        }, this);
+      } else {
+        elements.forEach(function(el) {
+          var evt = document.createEvent('CustomEvent');
+          evt.initCustomEvent(type, true, cancelable, detail || {});
+          el.dispatchEvent(evt);
+        }, this);
+      }
+    };
+
+    /* Start drawing on a canvas */
+    var start = function start() {
+      // For dimensions, clearCanvas etc.,
+      // we only care about the first element.
+      var canvas = elements[0];
+
+      if (canvas.getContext) {
+        ngx = Math.floor(canvas.width / g);
+        ngy = Math.floor(canvas.height / g);
+      } else {
+        var rect = canvas.getBoundingClientRect();
+        ngx = Math.floor(rect.width / g);
+        ngy = Math.floor(rect.height / g);
+      }
+
+      // Sending a wordcloudstart event which cause the previous loop to stop.
+      // Do nothing if the event is canceled.
+      if (!sendEvent('wordcloudstart', true)) {
+        return;
+      }
+
+      // Determine the center of the word cloud
+      center = (settings.origin) ?
+        [settings.origin[0]/g, settings.origin[1]/g] :
+        [ngx / 2, ngy / 2];
+
+      // Maxium radius to look for space
+      maxRadius = Math.floor(Math.sqrt(ngx * ngx + ngy * ngy));
+
+      /* Clear the canvas only if the clearCanvas is set,
+         if not, update the grid to the current canvas state */
+      grid = [];
+
+      var gx, gy, i;
+      if (!canvas.getContext || settings.clearCanvas) {
+        elements.forEach(function(el) {
+          if (el.getContext) {
+            var ctx = el.getContext('2d');
+            ctx.fillStyle = settings.backgroundColor;
+            ctx.clearRect(0, 0, ngx * (g + 1), ngy * (g + 1));
+            ctx.fillRect(0, 0, ngx * (g + 1), ngy * (g + 1));
+          } else {
+            el.textContent = '';
+            el.style.backgroundColor = settings.backgroundColor;
+          }
+        });
+
+        /* fill the grid with empty state */
+        gx = ngx;
+        while (gx--) {
+          grid[gx] = [];
+          gy = ngy;
+          while (gy--) {
+            grid[gx][gy] = true;
+          }
+        }
+      } else {
+        /* Determine bgPixel by creating
+           another canvas and fill the specified background color. */
+        var bctx = document.createElement('canvas').getContext('2d');
+
+        bctx.fillStyle = settings.backgroundColor;
+        bctx.fillRect(0, 0, 1, 1);
+        var bgPixel = bctx.getImageData(0, 0, 1, 1).data;
+
+        /* Read back the pixels of the canvas we got to tell which part of the
+           canvas is empty.
+           (no clearCanvas only works with a canvas, not divs) */
+        var imageData =
+          canvas.getContext('2d').getImageData(0, 0, ngx * g, ngy * g).data;
+
+        gx = ngx;
+        var x, y;
+        while (gx--) {
+          grid[gx] = [];
+          gy = ngy;
+          while (gy--) {
+            y = g;
+            singleGridLoop: while (y--) {
+              x = g;
+              while (x--) {
+                i = 4;
+                while (i--) {
+                  if (imageData[((gy * g + y) * ngx * g +
+                                 (gx * g + x)) * 4 + i] !== bgPixel[i]) {
+                    grid[gx][gy] = false;
+                    break singleGridLoop;
+                  }
+                }
+              }
+            }
+            if (grid[gx][gy] !== false) {
+              grid[gx][gy] = true;
+            }
+          }
+        }
+
+        imageData = bctx = bgPixel = undefined;
+      }
+
+      // fill the infoGrid with empty state if we need it
+      if (settings.hover || settings.click) {
+
+        interactive = true;
+
+        /* fill the grid with empty state */
+        gx = ngx + 1;
+        while (gx--) {
+          infoGrid[gx] = [];
+        }
+
+        if (settings.hover) {
+          canvas.addEventListener('mousemove', wordcloudhover);
+        }
+
+        if (settings.click) {
+          canvas.addEventListener('click', wordcloudclick);
+          canvas.addEventListener('touchstart', wordcloudclick);
+          canvas.addEventListener('touchend', function (e) {
+            e.preventDefault();
+          });
+          canvas.style.webkitTapHighlightColor = 'rgba(0, 0, 0, 0)';
+        }
+
+        canvas.addEventListener('wordcloudstart', function stopInteraction() {
+          canvas.removeEventListener('wordcloudstart', stopInteraction);
+
+          canvas.removeEventListener('mousemove', wordcloudhover);
+          canvas.removeEventListener('click', wordcloudclick);
+          hovered = undefined;
+        });
+      }
+
+      i = 0;
+      var loopingFunction, stoppingFunction;
+      if (settings.wait !== 0) {
+        loopingFunction = window.setTimeout;
+        stoppingFunction = window.clearTimeout;
+      } else {
+        loopingFunction = window.setImmediate;
+        stoppingFunction = window.clearImmediate;
+      }
+
+      var addEventListener = function addEventListener(type, listener) {
+        elements.forEach(function(el) {
+          el.addEventListener(type, listener);
+        }, this);
+      };
+
+      var removeEventListener = function removeEventListener(type, listener) {
+        elements.forEach(function(el) {
+          el.removeEventListener(type, listener);
+        }, this);
+      };
+
+      var anotherWordCloudStart = function anotherWordCloudStart() {
+        removeEventListener('wordcloudstart', anotherWordCloudStart);
+        stoppingFunction(timer);
+      };
+
+      addEventListener('wordcloudstart', anotherWordCloudStart);
+
+      var timer = loopingFunction(function loop() {
+        if (i >= settings.list.length) {
+          stoppingFunction(timer);
+          sendEvent('wordcloudstop', false);
+          removeEventListener('wordcloudstart', anotherWordCloudStart);
+
+          return;
+        }
+        escapeTime = (new Date()).getTime();
+        var drawn = putWord(settings.list[i]);
+        var canceled = !sendEvent('wordclouddrawn', true, {
+          item: settings.list[i], drawn: drawn });
+        if (exceedTime() || canceled) {
+          stoppingFunction(timer);
+          settings.abort();
+          sendEvent('wordcloudabort', false);
+          sendEvent('wordcloudstop', false);
+          removeEventListener('wordcloudstart', anotherWordCloudStart);
+          return;
+        }
+        i++;
+        timer = loopingFunction(loop, settings.wait);
+      }, settings.wait);
+    };
+
+    // All set, start the drawing
+    start();
+  };
+
+  WordCloud.isSupported = isSupported;
+  WordCloud.minFontSize = minFontSize;
+
+  // Expose the library as an AMD module
+  if (typeof define === 'function' && define.amd) {
+    define('wordcloud', [], function() { return WordCloud; });
+  } else if (typeof module !== 'undefined' && module.exports) {
+    module.exports = WordCloud;
+  } else {
+    global.WordCloud = WordCloud;
+  }
+
+})(this); //jshint ignore:line
+</script>
+<script>// create element
+function newlabel(el){
+  var newDiv = document.createElement("div");
+  var newSpan = document.createElement("span");
+  newDiv.id = 'wcLabel';
+  newSpan.id = "wcSpan";
+  el.appendChild(newDiv);
+  document.getElementById("wcLabel").appendChild(newSpan);
+}
+
+// hover function
+function cv_handleHover(item, dimension, evt) {
+  var el = document.getElementById("wcLabel");
+  if (!item) {
+    el.setAttribute('hidden', true);
+
+    return;
+  }
+
+  el.removeAttribute('hidden');
+  // console.log(evt.srcElement.offsetLeft);
+
+  el.style.left = dimension.x + evt.srcElement.offsetLeft + 'px';
+  el.style.top = dimension.y + evt.srcElement.offsetTop + 'px';
+  el.style.width = dimension.w + 'px';
+  el.style.height = dimension.h + 'px';
+
+  this.hoverDimension = dimension;
+
+  document.getElementById("wcSpan").setAttribute(
+    'data-l10n-args', JSON.stringify({ word: item[0], count: item[1] }));
+  document.getElementById("wcSpan").innerHTML =item[0]+":" + item[1];
+
+}
+
+function updateCanvasMask(maskCanvas) {
+    var ctx = maskCanvas.getContext('2d');
+    var imageData = ctx.getImageData(
+        0, 0, maskCanvas.width, maskCanvas.height);
+    var newImageData = ctx.createImageData(imageData);
+
+    var toneSum = 0;
+    var toneCnt = 0;
+    for (var i = 0; i < imageData.data.length; i += 4) {
+        var alpha = imageData.data[i + 3];
+        if (alpha > 128) {
+            var tone = imageData.data[i]
+                + imageData.data[i + 1]
+                + imageData.data[i + 2];
+            toneSum += tone;
+            ++toneCnt;
+        }
+    }
+    var threshold = toneSum / toneCnt;
+
+    for (var i = 0; i < imageData.data.length; i += 4) {
+        var tone = imageData.data[i]
+            + imageData.data[i + 1]
+            + imageData.data[i + 2];
+        var alpha = imageData.data[i + 3];
+
+        if (alpha < 128 || tone > threshold) {
+            // Area not to draw
+            newImageData.data[i] = 0;
+            newImageData.data[i + 1] = 0;
+            newImageData.data[i + 2] = 0;
+            newImageData.data[i + 3] = 0;
+        }
+        else {
+            // Area to draw
+            // The color must be same with backgroundColor
+            newImageData.data[i] = 255;
+            newImageData.data[i + 1] = 255;
+            newImageData.data[i + 2] = 255;
+            newImageData.data[i + 3] = 255;
+        }
+    }
+
+    ctx.putImageData(newImageData, 0, 0);
+    console.log(maskCanvas.toDataURL());
+}
+
+
+
+//mask function
+function maskInit(el,x){
+  console.log(1)
+  str = x.figBase64;
+  //console.log(str)
+  var newImg = new Image();
+  newImg.src = str;
+  newImg.style.position = 'absolute';
+  newImg.style.left = 0;
+  // console.log(el.clientHeight);
+  newImg.width = el.clientWidth;
+  newImg.height = el.clientHeight;
+  // maskCanvas = init(el, x, newImg);
+  vvalue = 128
+
+  ctx = el.firstChild.getContext('2d');
+
+                ctx.drawImage(newImg, 0, 0, canvas.width, canvas.height);
+                updateCanvasMask(ctx);
+
+
+
+
+
+            WordCloud(el.firstChild, { list: listData,
+                  fontFamily: x.fontFamily,
+                  fontWeight: x.fontWeight,
+                  color: x.color,
+                  minSize: x.minSize,
+                  weightFactor: x.weightFactor,
+                  backgroundColor: x.backgroundColor,
+                  gridSize: x.gridSize,
+                  minRotation: x.minRotation,
+                  maxRotation: x.maxRotation,
+                  shuffle: x.shuffle,
+                  shape: x.shape,
+                  rotateRatio: x.rotateRatio,
+                  ellipticity: x.ellipticity,
+                  clearCanvas: false,
+                  drawMask: true,
+                  hover: x.hover || cv_handleHover,
+                  abortThreshold: 3000
+                  });
+}
+
+</script>
+<script>HTMLWidgets.widget({
+
+  name: 'wordcloud2',
+
+  type: 'output',
+
+  initialize: function(el, width, height) {
+    var newCanvas = document.createElement("canvas");
+    newCanvas.height = height;
+    newCanvas.width = width;
+    newCanvas.id = "canvas";
+
+    el.appendChild(newCanvas);
+    newlabel(el);
+    return(el.firstChild);
+  },
+  renderValue: function(el, x, instance) {
+  // parse gexf data
+        listData=[];
+        for(var i=0; i<x.word.length; i++){
+          listData.push([x.word[i], x.freq[i]]);
+        }
+     if(x.figBase64){
+
+        maskInit(el,x);
+        console.log(3)
+
+      }else{
+        WordCloud(el.firstChild, { list: listData,
+                        fontFamily: x.fontFamily,
+                        fontWeight: x.fontWeight,
+                        color: x.color,
+                        minSize: x.minSize,
+                        weightFactor: x.weightFactor,
+                        backgroundColor: x.backgroundColor,
+                        gridSize: x.gridSize,
+                        minRotation: x.minRotation,
+                        maxRotation: x.maxRotation,
+                        shuffle: x.shuffle,
+                        shape: x.shape,
+                        rotateRatio: x.rotateRatio,
+                        ellipticity: x.ellipticity,
+                        drawMask: x.drawMask,
+                        maskColor: x.maskColor,
+                        maskGapWidth: x.maskGapWidth,
+                        hover: x.hover || cv_handleHover
+                        });
+      }
+    },
+      resize: function(el, width, height) {
+      }
+
+});
+</script>
+
+</head>
+<body style="background-color: white;">
+<div id="htmlwidget_container">
+  <div class="wordcloud2 html-widget html-fill-item" id="htmlwidget-689bff90322f56d45b01" style="width:960px;height:500px;"></div>
+</div>
+<script type="application/json" data-for="htmlwidget-689bff90322f56d45b01">{"x":{"word":["ஒரு","உன்","என்","நான்","நீ","என்ன","அது","அந்த","அவன்","வெளியே","போல","இன்னொரு","அதன்","அல்லது","இல்லை","ஏன்","எறும்புகள்","ஏதோ","தன்","அதை","என","என்னை","சில","ஆனால்","இரண்டு","உனக்கு","உன்னை","எனக்கு","மட்டும்","அங்கு","அவை","இது","இந்த","இப்போது","இருந்தது","தானே","தெரியவில்லை","பார்த்தேன்","வெறுமையின்","வேண்டும்","அரசனே","இன்னும்","ஓ","கிடையாது","நாட்டியமாடும்","நானும்","நீங்கள்","நீர்","போன்ற","மாதவி","அறிவாய்","இக்கணம்","இன்று","எனை","காலம்","கொண்டிருக்கிறது","கொண்டு","நம்","நாம்","மெல்ல","அவளுக்கு","அவள்","இப்படி","இனி","எண்ணிலடங்கா","ஒருவேளை","ஓர்","கண்டேன்","கனி","காற்றின்","கொண்டிருந்தது","கொண்டிருந்தேன்","நிழல்","நின்று","போல்","மரணத்தின்","யாரோ","அங்கே","அதுவும்","அப்போது","அவர்","அவர்கள்","இங்கே","உடலில்லை","உடலை","உடல்","எல்லா","எவ்வளவு","என்று","கடந்து","கடைசி","கூட்டம்","கொண்ட","சற்று","சின்னஞ்சிறிய","தான்","திடுமென","தெரியுமா","நாளையே","நோக்கி","பக்கத்தில்","பார்","பார்வை","பெரிய","பேருந்து","மீது","முன்பு","ரயில்","வந்து","அந்தப்","அப்பா","அன்று","இதுவரை","இருசக்கர","இருண்ட","இவ்வளவு","உங்கள்","உடனிரு","உள்ளே","எங்கோ","எண்ணங்களை","எப்படி","எனக்குள்","எனும்","என்னிடம்","ஒருவன்","ஒவ்வொரு","ஒன்று","காட்சி","காலத்தின்","காலத்தை","காலமும்","கூட","கொண்டே","கொள்ளும்","சந்தோஷம்","செய்யும்","செல்ல","செல்லும்","சொன்னது","நினைவு","நீங்களும்","பதிலுக்கு","பிறகு","பின்","போகிறது","போலும்","போன","மரங்கள்","மரம்","மழை","மீண்டும்","மீதும்","மேலும்","மேஜிக்","ராத்திரியில்","வருகின்றன","வாஷிங்","விட","விட்டுவிட்டு","வீடெங்கேயிருக்கிறது","வேறு","வைத்து","அதே","அதோ","அத்தனையும்","அப்புறம்","அமைதி","அம்மா","அருமை","அவளை","அவனை","ஆமாம்","ஆயிரம்","இங்கு","இதுதான்","இப்பொழுது","இரவு","இருக்கிறது","இருக்கிறதென","இருக்கிறேன்","இருட்டு","இருந்தாலும்","இருபத்தியிரண்டு","இலை","ஈக்குச்சி","உடலின்","ஊரில்","எங்கிருந்தோ","எங்கும்","எங்கே","எண்ணம்","எண்ணற்ற","எதையும்","எந்த","எலும்புகள்","எல்லாம்","எவரும்","எளிதில்","என்ற","என்றும்","என்னும்","ஏதோவொரு","ஏழு","ஏற்கனவே","கண்","கதை","கற்றுக்","கனவு","காண்கின்றேன்","காதல்","காமம்","காலத்தில்","கால்களை","காற்றில்","காற்று","கிடக்கிறது","கிளைகளில்","குறித்த","கைகள்","கையில்","கொண்டிருக்கிறார்கள்","கொண்டிருக்கிறாள்","கொண்டேன்","சரண்","சரி","சித்தம்","செய்து","சொல்லி","டக்","தகிக்கும்","தண்ணீர்","தலை","தாறுமாறாக","திடீரென","திரும்பத்திரும்ப","தூக்கி","தெரிந்தது","தெரியாமல்","தென்படத்","தொடங்கின","தோன்றுகிறது","நடக்கின்றேன்","நடந்து","நாள்","நானே","நான்தான்","நிரப்ப","நிலவெளி","நின்றுகொண்டு","நீளும்","நூறு","நேரம்","பழைய","பறவைகள்","பார்த்துக்","பெண்","போகும்","போலில்லை","ப்ளேடுகளின்","மண்டைக்குள்","மரத்தில்","மறதியின்","மறந்து","முகம்","முடிவின்மையின்","முறை","முன்","மேலே","மைய்யல்","யாரும்","யாவும்","யென்ன","வந்தது","வயது","வருகிறது","வழி","வழிய","வாராணசி","வாழ்வு","விதை","விமானம்","விரைகிறது","விளக்க","வீதியில்","வேடிக்கை","அங்குதான்","அடியெடுத்து","அடுக்கி","அதற்கு","அதிகமாக","அந்தப்பக்கமாக","அப்படியே","அம்பலப்படுத்த","அம்மலர்","அரவம்","அர்த்தத்தை","அலைய","அல்ல","அவளுடைய","அவற்றின்","அவற்றை","அவ்வளவு","அவ்வளவுதான்","அழுக்குத்","அறையில்","ஆங்காங்கே","ஆசை","ஆட்டம்","ஆம்","ஆய்வாளர்கள்","ஆனாலும்","இங்குதான்","இடம்","இடையே","இதற்கு","இதை","இதோ","இப்படித்தான்","இப்போதெலாம்","இயலவில்லை","இரவின்","இரவையும்","இருக்கும்","இருங்கள்","இருந்தும்","இருப்பதாகவும்","இருப்பின்","இருளின்","இருள்","இல்லத்தில்","இல்லையென","இவ்வுலகை","இறந்தவர்களின்","இறுக","இன்றும்","உடலுக்குள்","உட்பட","உதடுகள்","உதிரம்","உதிர்ந்த","உரிமையை","உலகம்","உலகின்","உள்ளது","உள்ளன","உள்ளாடை","உள்ளுணர்வு","உறங்கக்கடவதாக","உனை","உன்னால்","உன்னிடம்","ஊடுருவி","ஊர்","ஊழி","ஊழ்வினையை","எங்கேயோ","எண்ணத்தின்","எண்ணிறந்த","எதிராக","எதிர்கொள்ள","எதிர்பாராவிதமாய்","எதை","எதையோ","எத்தனை","எந்தவொரு","எப்போதுமே","எப்போதும்","எரியும்","எழுந்து","எறிகின்றன","எறும்பு","எனக்கும்","என்பதையும்","என்றேன்","என்னவோ","என்னெதிரே","என்னையும்","ஏகாந்தம்","ஏதுமில்லை","ஏதோவொன்று","ஏறியிறங்குகிறது","ஏற்றிக்கொண்டு","ஐம்பது","ஒருத்தி","ஒருமுறை","ஒருவர்","ஒரேயொரு","ஒவ்வொன்றாய்","ஒளிந்து","ஒற்றை","ஒன்றுகூட","ஒன்றுகூட்டி","ஓடு","ஓவ்வொன்றுக்கும்","ஓவ்வொன்றும்","ஓவ்வொன்றை","கடைசியில்","கண்கள்","கப்பல்","கயிறு","கரங்கள்","கரப்பான்","கரைகளில்","கரையும்","கரையை","கலந்து","கழற்றி","கழன்று","கழுத்தை","களைப்பு","கறுப்புப்","கற்களை","கற்பனை","கனக்கும்","கனவிற்கு","காக்க","காக்கைகள்","காணமுடிகிறது","காதலிணைகள்","காத்திருக்கிறது","காலமோ","கால்கள்","காற்றோடு","குழப்பத்தை","குறிப்புகள்","குற்றவுணர்ச்சியின்","கூடவே","கூடாது","கூடி","கூடிய","கூட்டிப்போ","கேட்கிறது","கேட்டு","கை","கொஞ்சமாக","கொஞ்சம்","கொடிப்பாசிகளின்","கொண்டிருந்தான்","கொதிக்க","கொள்கிறேன்","கொள்ள","கோட்டி","சகலத்தையும்","சந்தோஷங்கள்","சந்தோஷத்திற்கு","சப்தம்","சமயம்","சமவெளி","சரிந்து","சாலையை","சிகரெட்","சிக்கலாய்","சிரிக்கத்","சிலவற்றில்","சிவப்பு","சீதவொளி","சுடருக்குள்","சுதந்திரம்","சுவர்","சுழற்பாதை","சூதானமாய்","சூரியன்","செய்வதென்றே","செல்கின்றன","செல்கையில்","செவிகளை","செவியை","சொட்டச்","சொல்ல","ஞாபகங்கள்","ஞாபகத்தின்","ஞாபகம்","டப்பாவினுள்","தம்பி","தலையில்","தலையை","தனிமையின்","தனியே","தன்னை","தன்னைத்தானே","தன்னையே","தாண்டி","திடீர்","திரண்டு","திரும்புதல்","திறந்து","தின்னும்","துயரம்","துயில்","துருப்பிடித்த","தூக்கத்தை","தூக்கிக்கொண்டு","தூங்கிக்","தெரிந்து","தெரியாது","தெரியும்","தேடி","தொடங்கி","தொடங்கியிருந்தன","தொலைவில்","தோழி","தோற்றம்","நடக்கிறது","நடக்கின்றோம்","நடனம்","நடுக்கடலில்","நண்பா","நமக்குள்","நம்ப","நம்பினால்","நம்புங்கள்","நம்மை","நரம்பு","நல்ல","நல்லது","நாங்கள்","நாயொன்று","நாய்","நாளாக","நாற்காலியில்","நிமிடம்தான்","நிலவெளியிலிருந்து","நிலவொளி","நிழலுக்கு","நிறைந்த","நிறைய","நிற்க","நிற்கின்றன","நிற்கின்றேன்","நிற்கும்","நினைவில்","நினைவின்","நினைவே","நீட்டி","நீதான்","நீந்துகிறேன்","நீயே","நீலத்தின்","நீலத்தை","நீளமான","நூற்றாண்டு","நெருப்பு","நேற்றின்","படிக்கப்பட்டு","படுக்கையில்","பதாகையை","பத்து","பலத்தையும்","பல்லாயிரம்","பள்ளியில்","பறக்கும்","பறந்து","பறவை","பற்களில்","பாடுகின்றன","பார்க்கலாம்","பார்க்கிறாள்","பார்த்ததும்","பார்த்து","பிடித்து","பிரமைகளை","பிறிதொரு","பின்பு","பின்னங்கழுத்தின்","பின்னாலும்","பின்னால்","புதைத்த","பூச்சி","பூமி","பூரான்களை","பெண்ணின்","பெயர்","பெயர்கள்","பேச்சு","பொருட்டு","போகிறோம்","போகின்றது","போகின்றன","போட்டுக்","போது","போதும்","போய்","போலவே","போலிருக்கிறது","போலிருக்கின்றன","போற்றுதும்","போனாய்","போனேன்","மகிழ்ச்சி","மகிழ்ச்சியில்","மஞ்சள்","மட்டுமே","மட்டும்தான்","மண்டபத்தில்","மண்ணில்","மத்தியில்","மரக்கட்டையென","மரத்தின்","மருத்துவ","மலை","மறக்க","மறதி","மறந்துவிட்டதா","மனிதன்","மாத்திரம்","மான்","மிக","மிதக்கும்","முகமூடியணிந்த","முடியாது","முடியுமா","முடியும்","முடிவதேயில்லை","முதலைகள்","முதல்","முதுகெலும்பு","முழங்காலிட்டு","முன்னாலும்","முன்னேறிச்","மூட்டைக்கட்டி","மூளை","மூன்று","மெதுவாக","மேசையில்","மேல்","மொழியை","ம்ருக","யாருமே","யார்","யென்","யென்ற","யோனி","வசிக்கும்","வந்துவிட்டது","வரக்காணோம்","வருகிறீர்களா","வருகின்றது","வருடங்களுக்கு","வரும்","வரை","வனம்","வாகனத்திலும்","வாகனத்தில்","வாகனம்","வாய்","வாழ்வின்","வாழ்வை","வானத்தை","விட்டு","விட்டுச்","விண்ணப்பபடிவம்","விதையாக","வியர்வை","விரும்புகிறேன்","விழி","விழிகள்","விழுகின்றது","விளக்கமளித்து","வீடு","வீட்டை","வீழ","வெளியை","வெறுமை","வெற்றிடத்தை","வேகவேகமாய்","வேண்டாம்","வேறொன்றுமில்லை","வேனிற்காலமே","வைக்கப்பட்ட","வைக்கப்பட்டிருக்கும்","வைக்கிறோம்","வைத்திருந்தான்","அ","அகங்களின்","அகஞ்சுழிக்க","அகதிமுகாம்தென்படத்தொடங்கியது","அகதியாக","அகப்படாமல்","அகல","அகல்ச்சுடர்","அகவை","அகழாய்வு","அக்கறையின்","அக்குப்பியை","அங்கிருக்கும்","அங்கும்","அங்குலமாக","அங்குலம்","அங்கேயே","அங்கொரு","அசிரத்தையானவேனிற்காலயிரவுகளில்","அசேதனங்களின்","அசைகிறது","அசைக்கிறது","அசையவில்லை","அசையும்","அசைவில்லை","அசைவின்மை","அசைவு","அசைவுகள்","அசைவை","அசோகம்","அச்சத்தில்","அச்சம்","அச்சுடர்தம்","அச்சுழற்பாதையை","அச்சுறுத்துகிறது","அஞ்சலில்","அடக்கமுடியாத","அடர்ந்த","அடித்துக்கொள்ளும்","அடித்துச்","அடித்துச்செல்லப்படுகிறேன்","அடிப்பது","அடிப்பாதியில்","அடிமேல்","அடியாழத்திற்கு","அடியில்","அடியும்","அடிவாரத்தில்","அடிவைத்து","அடுக்கப்பட்ட","அடுக்களையிலிருந்து","அடுத்த","அடுத்தது","அடுத்தநாள்","அடுத்து","அடைக்கப்பட்டிருக்கிறதென்றும்","அடைந்து","அடைந்தேன்","அடைய","அடையும்","அடைவதற்குள்","அட்டைப்பூச்சிக்கான","அட்டைப்பூச்சியாக","அணிந்துகொண்டு","அணியயியலாத","அணியிலக்கணம்","அணியும்","அணைக்கட்டின்","அணைத்தபடி","அணைத்து","அண்டத்திற்கான","அதரத்திற்கு","அதரமென","அதலபாதாளத்தை","அதளபாதாளம்","அதற்கான","அதற்கிருக்கிறது","அதற்குள்","அதற்கென்ன","அதற்கொரு","அதனடியாழங்களிலிருந்து","அதனருகே","அதனாலென்ன","அதனால்","அதனிடம்","அதனூடே","அதன்பிறகு","அதன்பொருட்டே","அதிக","அதிசயமான","அதிர்ஷ்டத்தை","அதிர்ஷ்டம்","அதிலிருக்கிறார்","அதிலொன்றில்","அதில்","அதுதான்","அதுவுன்","அதுவே","அதேசமயம்","அதேயிடத்திற்கே","அதையும்","அத்தகப்பன்","அத்தனை","அத்தனையையும்","அத்தாயின்","அத்துமீறும்","அந்தஉப்பில்ஒருமண்வெட்டிசெய்து","அந்தக்","அந்தத்தையா","அந்தப்பக்கத்தில்","அந்தம்வரை","அந்தரத்தில்","அந்தி","அந்திச்சிவப்பை","அந்திச்சூரியனுக்கு","அந்தியின்","அந்நண்பன்","அந்நாற்காலியில்","அந்நிதானமின்மைக்கு","அந்நியர்கள்","அபத்த","அபோதயிருட்டு","அப்படி","அப்படியா","அப்பார்ட்மென்ட்","அப்பால்","அப்பாவின்","அப்பாவுக்கும்","அப்பாவை","அப்பூங்கா","அப்பூச்சி","அப்பைசாசத்திடம்","அப்பொட்டலத்திலிருந்து","அப்பொட்டலத்தை","அப்பொழுதெலாம்","அப்பொழுதே","அப்போதுகூட","அப்போதெல்லாம்","அமரத்துவம்","அமரும்","அமர்க்கிறாள்","அமர்ந்தாயா","அமர்ந்திருந்தன","அமர்ந்திருந்தாள்","அமர்ந்து","அமர்ந்துகொண்டோம்","அமலைச்செடிகளென","அமிலக்கரைசலில்","அமைந்திருக்கிறதோ","அம்பென","அம்மணம்","அம்மருத்துவமனைக்கின்று","அம்மலரையே","அம்மல்லிகை","அம்மாயத்தை","அம்மாவை","அம்மாளிகை","அம்முகத்தின்","அம்மொட்டு","அரக்கர்களோடு","அரக்கன்","அரக்குமாளிகைக்குள்","அரக்குமாளிகைதான்","அரிக்கப்பட்ட","அரிக்கப்பட்டிருக்கக்கூடாது","அருகாமையை","அருகே","அருணயாமம்","அருவெறுப்பூட்டும்","அரைகுறை","அரைத்துயிலிருக்கும்","அர்த்தங்கள்","அர்த்தமுமில்லை","அர்த்தம்","அலமாரி","அலமாரியில்","அலமாரியையும்","அலை","அலைகின்றன","அலைக்கோபுரங்களே","அலையென","அல்லிருள்வேலாய்","அல்லும்","அவசர","அவசரமாய்","அவசியப்படுகின்றது","அவசியம்","அவதிப்படுபவர்","அவதிப்பட்டிருக்கக்கூடும்","அவரிடம்","அவரை","அவர்களால்","அவளா","அவளிடம்","அவளெப்படி","அவள்மீது","அவற்றிடை","அவற்றில்","அவனிடம்","அவனுக்கிது","அவனுக்கு","அவனுக்கேதோ","அவனுடைய","அவனுடையதோல்விகள்அனைத்தும்உப்பாயிற்று","அவனுருவம்","அவன்தான்","அவன்பின்னேவழுக்கிக்கொண்டுவரும்நூறுவயதிலிருக்கும்நோயை","அவாச்சியப்","அவிழ்க்கிறது","அவையிரண்டும்","அவ்வப்போது","அவ்வழியெங்கும்","அவ்வாக்கியம்","அவ்விரு","அவ்வீட்டு","அழகாக","அழகாகத்தான்","அழகிய","அழகெனும்","அழச்சொல்லி","அழலுக்கு","அழவைக்கக்","அழிக்கப்படுகின்றேன்","அழித்துவிட்டார்களென்பது","அழிரப்பரால்","அழிவு","அழுகிறது","அழுகை","அழுக்காக","அழுக்கு","அழுக்குத்துணிகளையே","அழுதாயா","அழுது","அழுதுகொண்டிருக்கிறார்","அழுத்தமாக","அழுத்தி","அழுவதை","அழுவதையோ","அழைக்கிறது","அழைக்கிறாள்","அழைத்துவருகிறேன்","அளக்காமல்","அள்ளி","அள்ளியள்ளி","அறிந்துகொண்டான்","அறியமுடியுமோ","அறியயியலாமல்","அறியாமல்","அறிவது","அறிவிக்கும்","அறிவித்துக்கொண்டு","அறிவிப்பு","அறிவும்","அறிவை","அறை","அறைகள்","அறைக்கு","அறையின்","அறையை","அற்புதங்கள்","அனற்காற்று","அனுதினமும்","அனுப்பப்படும்","அனுப்பிவைப்பான்","அனுமதித்தோம்","அனுமானிக்க","அனுராகமென","அனேகமாக","அனைத்திடமிருந்து","அனைத்தும்","அனைத்தையும்","அனைவரும்","அன்புள்ள","அன்றி","அன்றிருந்ததுபோல","அன்றிலிருந்து","அன்றைய","அன்னப்பறவையென","அன்னம்","அன்னாரின்","அன்னாரைக்","அன்னையே","ஆ","ஆக","ஆகாசத்துக்கு","ஆகாசத்தை","ஆகாது","ஆகிறது","ஆக்கிரமிக்க","ஆக்கிரமித்தாலும்","ஆசிரியர்","ஆசைகளுக்கு","ஆசைகள்","ஆசைதான்","ஆச்சரியத்தோடு","ஆடிக்கொண்டிருக்கிறது","ஆடுகள்","ஆடுகிறது","ஆடும்","ஆடுவது","ஆடைகளை","ஆட்டத்தை","ஆட்டினோம்","ஆட்டோ","ஆண்குறிகளுடைய","ஆண்டுகளில்","ஆண்டுகள்","ஆதி","ஆபரணமாய்","ஆமையென","ஆம்களோடும்","ஆம்புலனஸ்","ஆயிற்று","ஆயினும்","ஆயுதங்களின்","ஆயுதமாக்கக்கூடியதாக","ஆரம்பிக்கையில்","ஆர்ப்பரிக்கிறது","ஆலய","ஆலோசித்திருக்கலாம்","ஆவி","ஆவியாகின்றன","ஆவியை","ஆழப்புதைக்கப்பட்ட","ஆழம்","ஆழாதியாழத்திற்கு","ஆழியிலிருந்து","ஆழியும்","ஆளற்ற","ஆளாய்","ஆளுக்கொரு","ஆளுண்ணும்","ஆளுயரப்","ஆள்காட்டி","ஆறாவது","ஆறு","ஆறுதலுரைப்பது","ஆறுமாதம்","ஆறும்","ஆனாய்","ஆனைக்கொன்றான்","இக்கடலின்","இக்கட்டில்","இக்கணங்களைப்","இக்கணமும்","இக்கதை","இக்குப்பிக்குள்தான்","இங்கும்","இங்கேயிருக்கும்","இச்சையின்","இடது","இடநெருக்கடியில்","இடமும்","இடமே","இடம்பெயர்த்துவிட்டிருந்தது","இடிந்து","இடியுடன்","இடையில்","இடைவிடாது","இட்டு","இணைக்கப்படுவதை","இணைக்கவே","இணைத்து","இதயச்செந்நதியில்","இதயத்தில்","இதயத்திற்கு","இதயத்திற்குமான","இதயத்தை","இதயம்","இதழில்","இதற்காக","இதற்கிடையே","இதற்குள்","இதுகாறும்","இதுவுமொரு","இதுவே","இதெல்லாம்","இதென்ன","இதைத்தான்இல்லையா","இதையெலாம்","இத்தனை","இத்தனைஇருட்டுக்குள்","இந்தப்பக்கமாக","இந்தயிரவு","இந்தியாவுக்கு","இந்நடுநிசியில்","இந்நவீன","இந்நாளில்","இந்நாளின்","இந்நாற்காலி","இந்நீண்ட","இந்நீலத்தினடியில்","இந்நெடிய","இந்நெடுங்கால","இந்நேரம்","இப்படியொரு","இப்பொழுதும்","இப்போதிருக்கும்","இப்போதெல்லாம்","இப்போதைக்கது","இப்போதைக்கு","இமைகளாய்","இமைகள்","இம்முறை","இம்மூளை","இயக்கவைப்பார்கள்","இயங்க","இயந்திரங்களின்","இயலாத","இயலுமோ","இயல்கிறது","இயல்பு","இயன்றவரை","இயன்றால்","இரட்டைக்கண்ணாடி","இரண்டாக","இரண்டாவது","இரண்டுயென","இரவிலிருக்கும்","இரவிலும்","இரவில்","இரவுகளென","இரவுக்குள்","இரவுதான்","இரவுவேளையில்","இரவை","இரவைத்தாண்டி","இரு","இருக்க","இருக்கக்காண்கின்றோம்","இருக்கச்சொல்கிறான்","இருக்காதா","இருக்கிறதென்று","இருக்கிறாய்","இருக்கிறான்","இருக்கிறோம்","இருக்கின்றன","இருக்கின்றனர்","இருக்குமோ","இருக்கைகளில்","இருக்கையில்","இருக்கையில்ஏன்","இருட்டாய்","இருட்டில்கூட","இருட்டின்","இருட்டுக்கு","இருட்டும்","இருட்டே","இருட்டோடு","இருநதிகள்","இருந்திருக்கிறது","இருந்திருப்பான்","இருந்து","இருந்தேன்","இருபதிலக்க","இருபது","இருப்பதிலேயே","இருப்பதை","இருப்பதைப்","இருப்பிலிருந்து","இருப்பு","இருப்புவழிகள்","இருப்பைப்","இருமலர்களுக்கு","இருமலில்","இருமுலைகளும்","இரும்புக்கனவு","இருவிரல்","இருள","இருளென","இருளே","இருளை","இருள்வடிவ","இரைச்சல்","இலைகளென","இலைதளைகளை","இலைத்தொகுதிக்குள்","இலையற்ற","இல்லாத","இல்லாதபோது","இல்லைகளுக்கு","இல்லைகளோடும்","இல்லையா","இல்லையில்லை","இல்லையெனும்","இல்லையோ","இவள்","இவனை","இவை","இவைகளுக்கு","இவைகளென்று","இவ்வதிகாலையில்","இவ்வறைக்குள்தான்","இவ்வானத்துக்கு","இவ்வுடலைப்பிடி","இவ்வுயிர்கள்","இவ்வுலகத்து","இவ்வுலகமொரு","இவ்வுலகம்","இவ்வுலகின்","இவ்வெரியும்","இவ்வேற்பாடு","இழக்கின்றோம்","இழந்த","இழந்திருக்கின்றன","இழந்திருந்தது","இழப்பதையே","இழுக்கிறார்கள்","இழுக்கிறேன்","இழுத்துச்செல்லப்பட","இழுத்துச்சென்று","இளகி","இளஞ்சரீரத்திலிருந்து","இளமை","இளமையின்","இளம்","இளம்புலரி","இளவரசி","இளிக்கிறது","இளைஞன்","இளைப்பாறல்","இளைய","இளையராஜா","இளையவன்","இறக்கைகளற்றஒரு","இறங்கி","இறங்குகிறாள்","இறந்தவர்கள்","இறந்துபோன","இறந்துவிட்டார்","இறுகச்","இறுகிவிட்டது","இறுக்கியபடி","இறுக்கின்றன","இறுதி","இறுதியாக","இறுதியில்தான்","இனம்புரியா","இனியதோல்வியை","இன்மை","இன்மைக்கு","இன்மைக்குச்","இன்மைக்குள்","இன்மைக்குள்ளிருந்தபடி","இன்மையின்","இன்றின்","இன்றென்னவோ","இன்றைக்கு","இன்னது","இன்னதென","இன்னுமந்த","இன்னும்நூறுமண்வெட்டிசெய்யும்அளவுக்குஉப்பு","இன்னொன்றில்","ஈக்குச்சிகளின்","ஈக்குச்சிதான்","ஈக்குச்சியால்","ஈக்குச்சியை","ஈர","ஈரக்கூந்தல்","ஈரமரித்த","ஈரம்","ஈர்ப்புவிசையை","ஈற்றிலெது","உகந்த","உங்களால்","உங்களிடம்","உங்களுக்கு","உங்களுக்கே","உங்களைத்தான்","உங்களையா","உச்சந்தலையில்","உச்சரிப்பில்","உச்சாடன","உச்சியில்","உடம்பு","உடலில்","உடலுக்குள்ளிருக்கும்","உடலெல்லாம்","உடல்களும்","உடல்கள்","உடல்பருத்து","உடுக்கையடித்தபடி","உடுமீன்கூட்டங்கள்","உடை","உடைகளை","உடைகள்","உடைந்த","உடைந்திருக்க","உடையக்கூடியதாக","உட்காரவில்லை","உட்காரவைத்தார்கள்","உட்கார்ந்திருக்கிறது","உட்கார்ந்திருக்கிறாள்","உட்கார்ந்திருக்கின்றேன்","உட்கார்ந்திருந்தது","உட்கார்ந்திருந்தன","உணர்ச்சிகரமாக","உணர்த்த","உணர்த்தியது","உணர்ந்துகொள்ள","உணர்வை","உண்டாயென","உண்டு","உண்டுவிட்டிருந்தது","உண்ண","உண்மைகள்","உண்மைதான்","உண்மையின்","உண்மையை","உதடெங்கும்","உதட்டில்","உதயகாலம்","உதரக்","உதவவில்லை","உதவாத","உதவியின்றி","உதவியுமின்றி","உதிரக்கொதிக்கு","உதிரத்தாலான","உதிரத்தின்","உதிரத்தை","உதிரும்","உதிர்ந்துகிடக்கும்","உதைக்கலாம்","உபகரணங்களுக்கு","உபகாரத்தால்","உபசரிக்கும்","உப்பளத்திற்கு","உப்பாக்கப்படுகிறாய்","உப்பின்","உப்புமண்வெட்டி","உம்மால்","உம்மை","உயர்ந்த","உயிரால்","உயிரில்","உயிரோடிருப்பதே","உயிரோடு","உயிர்","உயிர்கடிகாரம்","உயிர்த்தெழுதல்","உரித்தெறிந்தபடி","உரிமை","உரு","உருகவைக்கும்","உருகி","உருட்டுவது","உருண்டு","உருண்டுவருகின்றது","உருதிரிய","உருமாற","உருமாறுவார்","உருவத்தை","உருவம்","உருவற்ற","உருவிலிருக்கிறதாம்","உரைப்பேன்","உரையாடுவதை","உரையாற்றிக்","உலகத்திற்கு","உலகத்துடன்","உலகமேயொரு","உலகை","உலர்த்துவது","உலா","உலோகம்","உவகையாக","உளல்","உள்மனதை","உள்ளம்வியாகுலத்தில்","உள்ளாடைகளில்","உள்ளிழுக்கிறேன்","உள்ளும்","உள்ளூர்வாசிகள்","உள்ளேப்","உள்ளேயிருந்து","உள்ளேயும்","உள்ளேன்","உறங்கிக்","உறவினர்கள்","உறவுகள்","உறிஞ்சுகின்றது","உறுதியாய்","உறுதியாய்க்","உறைந்துவிடுகிறோம்","உற்சாகமானது","உற்சாகம்","உனக்காக","உனக்காயென்று","உனக்கான","உனக்குத்தான்","உன்மலராய்","உன்வளம்","உன்னத","உன்னதத்தை","உன்னுடலை","உன்னுறுதி","உன்னையா","உன்னோடு","ஊகிக்கயியலாத","ஊகிக்கயியலாதவரான","ஊகித்தலில்","ஊஞ்சலில்","ஊஞ்சல்களையும்","ஊதுபத்தி","ஊதைக்காற்று","ஊரும்","ஊரெங்கும்","ஊரோடு","ஊர்தியொன்றை","ஊர்ந்துகொண்டிருக்கின்றன","ஊர்வது","ஊர்வலமாய்","ஊர்வலம்","ஊழல்தான்","ஊழிமலரும்","ஊழிவெள்ளமாய்","ஊளை","ஊளைகளினூடே","ஊளைச்சப்தம்","ஊளையிடத்","ஊளையிடுகின்றது","ஊறும்","ஊற்றிக்","ஊற்றில்","எகிறிக்குதிக்கயியலாத","எக்கலகமுமின்றி","எக்கவலையுமில்லாமல்","எக்ஸ்ரே","எங்களது","எங்களை","எங்கு","எங்குமே","எங்கெங்கோ","எங்கேயெனக்","எங்கோவுக்கும்","எங்ஞனம்","எச்சரிக்கிறது","எச்சரீரமும்பொருத்தமாயில்லை","எச்சில்","எஞ்சியும்","எஞ்சுகிறது","எடுக்கப்பார்க்கின்றது","எடுத்து","எடுத்துக்","எடுத்துச்","எடுத்துவைக்க","எடுத்தேன்","எடைகல்தான்","எடைகல்லென","எட்டிப்பார்க்கின்றன","எட்டுத்திக்குகளிலிருந்தும்","எண்ணங்களுடன்","எண்ணங்களென","எண்ணங்கள்","எண்ணத்தையொத்த","எண்ணமாடங்கள்","எண்ணமில்லையென்றால்","எண்ணம்தானேயென்கிறது","எண்ணிக்","எண்ணிக்கொண்டிருக்கிறது","எண்ணிக்கொண்டிருக்கிறேன்","எண்ணுடன்","எண்ணெழுதிப்","எண்ணை","எதற்கும்","எதன்யெதன்","எதிரான","எதிரே","எதிரொலிக்க","எதிரொலிக்கிறது","எதிரொலிக்குரல்","எதிர்காலத்திலும்","எதிர்காலத்தினுள்","எதிர்காலம்","எதிர்கொள்ளப்","எதிர்பார்க்கிறீர்கள்","எதிலும்","எது","எதுவுமில்லை","எதுவும்","எதுவோ","எதையாவது","எதையெதையோ","எந்திரத்தில்","எந்நேரமும்","எப்படிப்பட்டதென்று","எப்படியாவது","எப்படியென","எப்பணியும்","எப்போது","எப்போதுமிருக்கிறது","எப்போதும்போகும்","எரிக்கமுடியுமா","எரிக்கவேண்டும்","எரித்திருந்தால்","எரித்துக்","எரிநட்சத்திரமென","எரிநட்சத்திரம்","எரிந்துகொண்டிருக்கிறது","எரிந்துகொண்டிருக்கின்றது","எரிப்பது","எரிமலையிலிருந்து","எரிவதாயொரு","எருமையென","எலுமிச்சை","எலும்பு","எலும்புகளையும்","எலும்புக்கூடுகளை","எலும்புச்சிறுவனைப்போல்","எலும்புத்துண்டொன்று","எல்லாமே","எல்லாவற்றிலிருந்தும்","எல்லிருளில்","எல்லைக்கோடு","எல்லையின்மை","எல்லையின்மையுடன்","எல்லோரும்","எவராலும்","எவருக்குமே","எவருக்கும்","எவருண்டு","எவருமில்லை","எவர்","எவற்றுடனெல்லாம்","எவற்றை","எவனிலடங்கா","எவ்வளவோ","எவ்வனமான","எழில்பட","எழுகின்றது","எழுதப்பட்டிருக்கும்","எழுதிக்கொண்டிருக்கின்றேன்","எழுதிக்கொள்ளும்கரங்கள்","எழுதுவது","எழுத்துக்களையொத்த","எழுந்தேன்","எழுபத்தியிரண்டு","எழுப்பவேண்டாமா","எழுவதென்பது","எளிதல்ல","எளிமையான","எளிமையானது","எறிகிறேன்","எறிகின்றோம்","எறும்புகளை","எறும்புக்கூட்டங்கள்","எறும்புக்கொல்லியாய்","எனக்","எனக்காட்டுகிறதுமென்பொருளாட்டத்தில்","எனக்குத்","எனக்குள்ளிருக்கும்","எனக்கெல்லாம்","எனக்கேட்டார்கள்","எனக்கேட்டேன்","எனச்சொல்ல","எனது","எனைச்","எனைப்","எனைவிட்டு","என்கிறது","என்பதெல்லாம்","என்பதே","என்றறியாமல்","என்றார்","என்றிருந்த","என்றென்றைக்குமாக","என்றேனும்","என்னதான்","என்னவா","என்னவானது","என்னவென்று","என்னிலடங்கா","என்னுடலில்","என்னுடலே","என்னுடையதை","என்னூர்","என்னே","என்னைத்தான்","ஏகச்சராசரமும்","ஏகாந்தத்தில்","ஏகாந்தமாய்","ஏகிக்கொண்டிருந்தான்","ஏக்கத்துடன்","ஏக்கத்தையும்","ஏக்கம்","ஏணி","ஏணியிலேறி","ஏதாவது","ஏதிலியொருவன்","ஏதுமறியாத","ஏதுமற்ற","ஏதுமிருக்காது","ஏதும்","ஏதோவுக்கும்","ஏமாற்றியிருக்கக்கூடும்","ஏமாற்றும்","ஏயென","ஏலத்திலெடுக்க","ஏவலிலிருக்கும்","ஏழாவது","ஏழுகடல்","ஏழுபுவன","ஏறத்தாழ","ஏறவிடவில்லை","ஏறிக்கொள்கிறார்கள்","ஏறிக்கொள்ளப்போகிறேன்","ஏற்பாடு","ஏற்றுக்கொள்வதில்லை","ஏற்றுக்கொள்ளவே","ஏனோ","ஐ","ஐந்தாவது","ஒடுங்கியிருக்கும்","ஒட்டகசிவிங்கிகள்","ஒட்டப்படுகிறது","ஒட்டிக்கொண்டிருந்தார்","ஒட்டிக்கொண்டிருப்பதை","ஒட்டிக்கொள்வது","ஒட்டிக்கொள்ளவாயென","ஒட்டுமொத்த","ஒட்டுமொத்தமாய்","ஒண்டிக்கொள்கிறார்கள்","ஒண்டிக்கொள்வேன்","ஒத்துவாழுதலுக்கு","ஒப்புக்கொள்கிறேன்","ஒருசமயத்தில்","ஒருத்தியை","ஒருநாள்","ஒருபோதும்","ஒருமாதிரி","ஒருவனால்","ஒருவன்தான்","ஒரே","ஒரேசமயத்தில்","ஒலிக்கின்றன","ஒளி","ஒளிக்கதிர்களை","ஒளித்து","ஒளித்துவைக்கிறது","ஒளித்துளிகள்","ஒளிந்துகொள்ள","ஒளிந்துக்கொள்","ஒளியில்","ஒளியின்","ஒளியுடன்","ஒளியுண்ணும்","ஒளிரும்","ஒளிவதற்காக","ஒளிவெட்டாய்","ஒற்றைக்கண்","ஒற்றையடி","ஒற்றையிலை","ஒற்றைரூபாய்","ஒன்றன்மேல்","ஒன்றுகலந்திடும்","ஒன்றுகூடி","ஒன்றுசொன்னால்","ஒன்றுமே","ஒன்றும்","ஒன்றென","ஒன்றைத்","ஓடங்களாக","ஓடிப்","ஓடிப்பிடித்து","ஓடிவரும்","ஓடிற்று","ஓடுகின்றது","ஓடுகின்றேன்","ஓடும்","ஓடுவேன்","ஓட்டைநாணயங்களென","ஓதுகின்றான்","ஓநாயைப்","ஓநாயொன்று","ஓய்ந்து","ஓய்வின்றி","ஓரமாய்","ஓரிடத்தை","ஓலை","ஓவியங்களிலிருந்து","கக்குகின்றது","கங்கை","கங்கைக்கு","கசந்தினிக்கும்","கச்சேரியை","கடக்கமுடியாத","கடக்கயியலாத","கடக்கிறது","கடக்கிறேன்","கடத்தக்கூடிய","கடத்தப்படுகின்றோம்","கடந்த","கடந்தகாலத்தை","கடந்திருக்கும்","கடந்துசெல்கிறது","கடந்தேன்","கடலின்","கடலேகுகின்றன","கடலோரங்களில்","கடனாக","கடன்பெறுகின்றன","கடிகாரமுட்கள்","கடிகாரம்","கடிதங்களை","கடினமான","கடுஞ்சொற்களின்","கடுமழை","கடைவாசலை","கட்டாற்று","கட்டி","கட்டிடத்துக்குள்ளே","கட்டியணைக்கலாம்","கட்டியணைத்துக்","கட்டினாயா","கட்டுக்கதையென","கணக்குவழக்கில்லாமல்","கணங்களுக்கு","கணச்சுடர்களிலொரு","கணச்சுழல்","கணத்தை","கணமும்","கணைக்கும்","கண்களின்","கண்களுக்குள்","கண்களை","கண்காணிப்பதாய்","கண்கூடாக","கண்சிமிட்டியது","கண்டடைவதென","கண்டது","கண்டதுண்டு","கண்டதும்","கண்டறிய","கண்டால்","கண்டிருக்கலாம்","கண்டு","கண்டுகொள்ளவில்லை","கண்டுபிடித்தார்","கண்டும்","கண்டுவளர்ந்தவனென","கண்டெடுக்கும்","கண்ணாடி","கண்ணாடிக்கெதிரே","கண்ணாடிச்","கண்ணாடியிலிருந்து","கண்ணாம்பூச்சி","கண்ணிமையாமல்","கண்ணில்படும்","கண்ணீர்","கண்ணுற்றேன்","கண்ணே","கண்ணை","கண்பொத்தி","கதவங்களைத்","கதவம்","கதவிடுக்கிலிருந்து","கதவை","கதவைக்காட்டிநிற்கும்","கதவைத்","கதறி","கதையாய்","கதையிலிருந்து","கத்தத்தொடங்கும்","கத்தரித்து","கத்தி","கத்திக்","கத்தியெடுத்துக்","கத்திரிகோல்களும்","கத்திரிகோல்களை","கத்துகின்றன","கத்தும்","கபாலத்தை","கபாலம்","கப்பலை","கப்பற்பயணத்திற்கு","கமலையோனிதான்","கம்பங்களை","கம்பளித்துணியைப்போல","கயிரும்","கயிறிழுக்கும்","கயிறென","கரங்களில்","கரடுமுரடான","கரவொலியெழுப்பி","கரிப்பொடியா","கரிய","கரியாற்றில்","கருங்கிராம்பு","கருஞ்சிவப்பில்","கருணையில்","கருமுட்டைதான்","கருவிழியே","கரைந்து","கரைந்துக்கொண்டே","கரைபுரண்டோடுகிறது","கரையடைகின்றேன்","கரையத்","கரையானால்","கரையில்","கலங்காமல்","கலங்கிவிட்டதைப்போல","கலந்தாலோசித்துக்","கலந்துபேச","கலவரம்","கலைக்கப்பட்ட","கல்யாணம்","கல்லகவிளிம்பு","கல்லறைத்","கல்லாய்ப்போன","கல்லின்","கல்லும்","கவசங்களென","கவசம்","கவருந்திழுக்கும்","கவலையா","கவனமாக","கவனித்துக்கொள்பவரென","கவிதைகளென","கவிதைகள்","கவியக்காத்திருக்கும்","கவ்விக்","கழட்டி","கழட்டிக்கொண்டு","கழட்டிபோட்டிருக்கிறான்","கழற்றிவிடப்படுகிறது","கழித்து","கழிப்பறையின்","கழியும்","கழுத்தில்","கழுத்துக்கு","கழுத்தும்","களவுமாக","கறிவேப்பிலைச்செடிகள்","கறுக்கலா","கறுத்த","கறுந்தடயங்கள்","கறுப்பு","கற்களிலிருந்து","கற்பலகையிருக்கும்","கற்றாயா","கற்றுக்கொடுக்கும்","கனரகவாகனங்கள்","கனலுக்கு","கனலோடு","கனல்","கனவாகின்றது","கனவிலிருந்து","கனவிற்குள்","கனவின்","கனவுக்குள்","கனவுவீதிகள்","கனவே","கனிக்குள்","கனிவாய்","கன்னத்தில்","கன்னத்தைத்","காஃபி","காகிதங்கள்","காக்கையாய்","காடு","காட்சிகள்","காட்டாத","காட்டியது","காட்டியிருக்கிறோமோ","காட்டு","காட்டுகிறது","காட்டுகின்றது","காட்டும்","காட்டெருதுகளின்","காணக்","காணப்","காணயியலாமல்","காணவரும்","காணவில்லை","காணவில்லையாம்","காணா","காணாததுபோலிருந்து","காணாமல்போன","காணிக்கைதான்","காணும்","காணோம்","காண்கிறாய்","காண்கிறான்","காண்கின்றது","காதலின்","காதலுக்காக","காதலுக்குள்","காதலுடையது","காதல்வசப்படுகிறது","காதுகேளாததுபோல்","காத்திருக்கிறான்","காத்திருக்கையில்","காத்திருந்து","காத்திருந்தேன்","காத்திருப்பிற்குப்","காத்து","காத்துநிற்கின்றது","காந்தச்செடிகள்","காமத்தையும்","காமமெனவும்","காயங்களில்","காயம்","காயாபுரிக்கோட்டை","காரணமெலாம்","காரணமேயின்றி","காரன்னப்","காரியங்களை","காரியம்","காலகட்டம்","காலங்களின்","காலங்களை","காலச்சக்கரம்","காலத்திற்கு","காலத்தோடு","காலமற்றுப்","காலமாக","காலமாயிருக்குமெனில்","காலமென்று","காலம்காலமாக","காலி","காலிகுப்பியொன்று","காலிசெய்ய","காலிபூமி","காலில்","காலை","கால்","கால்களில்","கால்களுடன்","கால்பந்திற்கு","காவலுக்கு","காற்றிலூர்ந்து","காற்றில்லை","காற்றுக்கு","காற்றுக்குப்","காற்றுப்பை","காற்றை","காற்றைத்","கிடக்கிறதென்று","கிடக்கிறேன்","கிடக்கின்றன","கிடத்தி","கிடந்த","கிடந்தால்","கிடப்பதுண்டு","கிடுகிடுத்துபோவாரென்று","கிடைக்கவில்லை","கிடைக்குமாயென்றேன்","கிடைத்தது","கிடைப்பதைப்","கிடையாதுனக்கு","கிணறே","கிணற்றிலிருந்து","கிரகம்","கிரணங்களின்","கிரீடம்","கிருஷ்ணஇரவொன்றில்","கிழக்கை","கிழிசல்","கிழித்துக்","கிழிந்து","கிளம்பிவிட்டேன்","கிளிஞ்சலின்","கிளைபிரியும்","கிறுகிறுப்பு","கிறுக்கத்","கிறுக்குகின்றது","கீழேபோட்டுவிட்டு","கீழேயிழுக்கின்றன","கீழ்","கீழ்ப்படியும்","குகைக்குள்","குகைவிழிகளையோ","குங்கும","குங்குமம்","குடிக்கும்","குடையை","குட்டி","குட்டிநாய்","குட்டைகளில்","குண்டுப்பைய்யன்","குண்டும்குழியுமான","குதறி","குதிக்கிறான்","குதிரைகளை","குதூகலிக்கின்றனர்","குத்தி","குத்துகிறது","குப்பியிலடைக்கப்பட்ட","குரங்களும்","குரலில்","குரலையாவது","குரல்கள்","குரல்தான்","குரல்வளையில்","குருடனிடம்","குருதியாயோடும்","குரைப்பொலிகள்","குரைப்பொலியினூடே","குலையவே","குவியல்களுக்கிடையில்","குழந்தைகள்","குழந்தையை","குழாம்","குழாயில்","குழாயோடு","குழிதோண்டி","குழியின்","குழுமியிருக்கிறோம்","குழுமியிருக்கின்றன","குழைத்து","குளவி","குளிர்","குளிர்சாதனப்","குளிர்சாதனப்பெட்டியில்","குள்ளமாகிவிட்டது","குறி","குறிவை","குறைந்தது","குறைந்தபட்சம்","குறைந்தப்பட்சம்","குறைந்து","குற்றமில்லை","குற்றவுணர்ச்சியை","குன்றுகளிலிருந்து","கூச்சலிட்டது","கூச்சலிட்டிருந்தபோது","கூடாரத்தை","கூடியிருக்கிறது","கூடியிருக்கிறதோ","கூடுகட்டுகின்றன","கூடும்","கூடொன்றை","கூட்டமாய்ப்","கூட்டிச்செல்லும்","கூட்டிச்சொல்வதுபோல","கூட்டிற்கு","கூட்டுகிறது","கூண்டு","கூதிர்","கூதிர்கால","கூரை","கூழாங்கற்கள்","கூற","கூறமுடியும்","கூறிக்கொண்டது","கூறுபோடுவதில்","கெட்டவார்த்தைகளில்கடவுள்உட்படஎல்லோரையும்திட்டுகிறார்","கேசம்","கேட்க","கேட்கலாம்","கேட்கவில்லை","கேட்கிறார்","கேட்கிறார்கள்","கேட்கிறேன்","கேட்கும்","கேட்டபிறகு","கேட்டாயா","கேமராக்களுடன்","கேமின்","கைகளால்","கைகளையும்","கைகள்தானாம்","கைது","கைத்தடி","கைநரம்புகளை","கைநரம்பும்","கையளித்துவிட்டு","கையில","கையிலணிந்திருக்கும்","கையிலெடுத்து","கையும்","கையைத்","கொசுதான்","கொடிப்பாசிக்கூட்டங்கள்","கொடியாய்","கொடியோடு","கொடுக்கப்படும்","கொடுக்கவா","கொடுக்கின்றான்","கொடுங்களென்றேன்","கொடுத்துக்","கொடும்புயலாய்","கொட்டுகின்றன","கொட்டுவார்கள்","கொண்டபோது","கொண்டாயா","கொண்டாள்","கொண்டிருக்கிறான்","கொண்டிருக்கிறேன்","கொண்டிருக்கின்றது","கொண்டிருக்கின்றன","கொண்டிருக்கின்றேன்","கொண்டிருக்கும்","கொண்டிருந்த","கொண்டிருந்தன","கொண்டிருந்தாள்","கொண்டிருப்பது","கொண்டுதான்","கொதிக்கு","கொத்திச்செல்லும்","கொம்புடைந்த","கொலம்பஸ்","கொலுசுகளாய்","கொலை","கொலைசெய்யச்","கொள்","கொள்கிறோம்","கொள்வது","கொள்வார்கள்","கொள்வேன்","கொள்ளப்","கோட்டைக்கபாடத்தின்","கோட்டைக்காவலன்","கோபப்படுவதில்","கோபுரம்","கோரப்படும்","கோரி","கோரைப்","கோலம்","கோஷித்தோம்","சகட்டுமேனிக்கு","சகலமும்","சகித்துக்கொண்டேன்","சகித்துக்கொள்ள","சகுனமாய்க்","சகோதரன்","சக்கரத்துக்கடியில்","சக்கரம்","சங்கீத","சங்கேத","சங்கொலியும்","சஞ்சலம்","சட்சட்டென","சட்டையை","சண்டமாருதம்","சண்டையிடவில்லை","சதா","சதுப்பு","சதுரங்கத்தில்","சதுரங்கப்பலகையாய்","சதை","சதைகள்","சதைவர்ணத்தில்","சந்தனங்","சந்திக்க","சந்திர","சந்தோஷத்தை","சந்தோஷமாக","சந்தோஷமாகத்தான்","சந்தோஷம்தான்","சபித்துத்","சப்தத்தோடு","சப்தமாக","சப்தமிடுவதும்","சப்தமின்றி","சப்தமுமில்லை","சப்பாத்துக்களை","சப்வே","சமயங்களில்","சமயத்தில்","சமரிட","சமர்ப்பணம்","சமனிலை","சமாதானம்","சமாளிக்க","சமுத்திரங்களையா","சமையலறை","சமையலறையில்","சம்ஹாரம்","சயனத்தின்","சரசரவென்று","சரமாரியாக","சரிசமமான","சரிசெய்தவாறு","சரிந்துவிட்டது","சரியா","சரியுமல்ல","சரியும்","சரியென்று","சரீரத்திற்கே","சரீரத்தை","சரீரமற்று","சரீரமில்லை","சரீரமில்லையென்றால்","சரீரம்","சரீரவெளியே","சருகை","சர்க்கஸ்","சர்ப்பமொன்று","சர்ரென","சலசலத்த","சலவை","சலனச்சகதிக்கு","சலிக்கவில்லையா","சலிப்பிலிருந்து","சலிப்பு","சலிப்பூட்டும்","சல்லிவேர்","சவசேமிப்பு","சவத்தை","சவப்பெட்டி","சவப்பெட்டிகள்","சவம்","சவரம்","சவாரிக்கென","சவ்வு","சளைக்காமல்","சளைப்பு","சறுக்கி","சறுக்கிலேறி","சறுக்கிவிளையாடும்","சறுக்குகளையும்","சற்றுதொலைவில்","சற்றுத்","சற்றுநேரத்திற்குள்","சனனியே","சன்னதிகளில்","சன்னலை","சன்னலோர","சன்னல்களுடேயும்","சாக்காடு","சாக்காட்டின்","சாக்கு","சாசுவதமாய்","சாதகமாய்","சாது","சாத்தியம்தான்","சாத்திவிடவா","சாமான்களின்","சாம்பலிலிருந்து","சாயங்காலங்கள்","சாயும்காலமும்","சாயைகளை","சாய்ந்தாடும்","சார்த்திய","சாலைகளினூடாக","சாலைச்சாக்கடைக்கு","சாலையின்","சாலையோரத்தில்","சாலையோரம்","சாவகாசமாய்","சாவை","சாளரத்திலெரியும்","சாளரத்தினுனூடே","சாளரத்தினூடே","சிக்கலின்","சிக்கிக்","சிக்கியது","சிசினத்திற்குள்ளிருந்து","சிசு","சிட்டுக்குருவியென","சிதற","சிதறிக்கிடக்க","சிதறிக்கிடக்கின்றன","சிதறும்","சிதைந்த","சித்தத்தை","சித்திரங்களை","சித்திரங்கள்","சிந்தாதே","சிப்பாயைப்போல்","சிப்பாய்களோடும்","சிப்பிகளின்","சிரம்","சிரித்துக்","சிரிப்பது","சிருங்கார","சிருஷ்டி","சிலநேரம்","சிலந்திவலையில்","சிலரோ","சிலிர்க்க","சிலைகளெழுப்பும்","சில்லெடும்","சிவக்க","சிவப்பாய்","சிவனைப்","சிறகுகள்","சிறப்பு","சிறப்போ","சிறிதுசிறிதாக","சிறு","சிறுத்தை","சிறுபொழுது","சிறுமி","சிறுமியை","சிறுயெலியென","சிறுவனைப்","சிறுவனொருவன்","சிறுவன்","சிறையாக்குவதில்","சிற்சில","சிற்பம்","சிற்றிடம்","சிற்றிலையும்","சிற்றுயிரியாய்","சின்னகை","சின்னங்களின்","சீட்டாடிக்கொண்டிருந்தது","சீட்டாடுபவர்கள்","சீட்டாட்டத்தில்","சீட்டுகளை","சீதளமானது","சீரழிவு","சீழ்நதியும்","சீனி","சுக்கிலத்துளிபோல்","சுக்குநூறாய்","சுடலையில்","சுண்டிவிட்ட","சுதந்திரத்துக்கு","சுத்தமாக","சுத்தமாகவே","சுமக்குமொரு","சுமந்துகொண்டு","சுமந்துபடி","சும்மா","சுயம்","சுயம்வரித்துக்","சுரங்கப்பாதைக்கு","சுரங்கம்","சுருட்டு","சுருண்டு","சுருள்களையா","சுருள்சுருளாய்","சுவடற்றுபோன","சுவரில்","சுவரொட்டி","சுவர்களுக்கு","சுவர்கள்","சுவர்ணமில்லை","சுழலும்","சுழல்கிறது","சுழல்கின்றன","சுழற்நாற்காலியிலமர்ந்தும்","சுழற்படிக்கட்டுகள்","சுழன்று","சுழிமின்னல்கூட்டங்களாக","சுள்ளிகள்","சுறுசுறுப்பாக","சுறுசுறுப்பான","சுற்றம்கெடுத்த","சுற்றி","சுற்றிக்கொண்டு","சுற்றிச்சுற்றிவருகிறது","சுற்றிச்சோம்பியது","சுற்றுக்கள்","சுற்றும்முற்றும்","சூடி","சூடிய","சூடினாயா","சூட்டிய","சூப்பர்மார்க்கெட்டில்","சூரியனும்","சூழ்கின்றது","சூழ்ந்தாய்","சூழ்ந்தால்","சூழ்ந்து","சூனியம்","சூன்யத்தனமான","சூன்யத்தை","சூன்யமுமில்லை","செக்கச்சிவந்த","செடிகள்","செதுக்கப்பட்ட","செத்தே","செந்நீல","செம்புத்துண்டு","செம்மறியாடுகளாய்","செய்கிறார்","செய்கிறார்கள்","செய்கின்றது","செய்திகளைச்சுமந்து","செய்திகள்","செய்தித்தாள்களிலிருந்து","செய்தித்தாள்கள்","செய்தியென","செய்திருக்கிறேன்","செய்திருந்தால்","செய்திருந்தான்","செய்துகாட்டு","செய்துகொடுக்கும்","செய்துகொண்டாள்","செய்ய","செய்யக்கற்றுக்கொள்வது","செய்யப்படாத","செய்யவேண்டுமென்ற","செய்வதையோ","செய்வார்","செருகப்படும்","செருகிக்கொண்டிருந்தான்","செல்கிறாய்","செல்கிறேன்","செல்கின்றாய்","செல்கின்றேன்","செல்லப்படுகிறேன்","செல்லமே","செல்லவேண்டாமா","செல்லவேண்டும்","செல்லாக்காசென","செல்லாதே","செல்வதெப்படி","செவிடன்","செவியில்","செவ்வாயில்","சென்மத்","சென்ற","சென்றாக","சென்றாகவேண்டும்","சென்றால்","சென்றிருக்கக்கூடாது","சென்றிருக்கலாம்","சென்றிருந்தேன்","சென்றிருந்தோம்","சென்று","சென்றுவிட்டார்கள்","சென்றுவிட்டேன்","சென்றேன்","சென்றோம்","சேமித்திருந்தான்","சேரவில்லையோ","சேர்ந்தது","சேலை","சேறு","சேறுபடிந்து","சேற்றுக்கலங்கலென","சைக்கிளுக்குள்","சொட்டுகின்றன","சொட்டுச்சொட்டாய்","சொந்தவீடு","சொப்பனத்திடமிருந்து","சொப்பனத்திலிருந்து","சொப்பனத்திலும்","சொப்பனம்","சொரிந்து","சொர்க்கத்தின்","சொல்கிறது","சொல்கிறேன்","சொல்கின்றன","சொல்லத்தான்","சொல்லவா","சொல்லவில்லை","சொல்லாட்டு","சொல்லிக்","சொல்லிச்சென்றுவிட்டன","சொல்லிப்பார்த்துவிட்டேன்","சொல்லிப்பார்ப்பாள்","சொல்லியவாறு","சொல்லில்லை","சொல்லின","சொல்லுங்கள்","சொல்லேன்","சொல்லைத்","சொல்வது","சொல்வேன்","சொற்களாலான","சொன்னால்","சொன்னான்","சொன்னேன்","சோகத்திற்கு","சோபாவுக்கு","சோப்பு","சோம்பிப்போகாதது","சோர்ந்துபோயிருக்கின்றன","ஞாபக","ஞாபகத்தையும்","ஞாபகப்படுத்திவிடுகிறது","ஞாபகம்தான்","ஞாயிறு","டீக்கடையில்","தகடுகளை","தகப்பனென","தகவலறிந்து","தகனமேடையில்","தகுதியுள்ளது","தங்களது","தங்களை","தங்கள்","தசையே","தடயங்கள்","தடவைகள்","தடுப்பார்","தடுமாறுகையில்","தட்டப்பட்டது","தணல்","தணிவு","தண்டவாளங்களில்","தண்ணீரை","தண்பகலுக்குள்","ததும்ப","தத்துவ","தந்தாலே","தந்தையை","தந்தையைப்","தப்பிக்க","தப்பித்துக்","தப்பித்துச்செல்கிறது","தப்பித்துவரப்","தப்பிப்பிழைக்கும்","தப்பியதை","தப்பிவிட்டேன்","தம்","தயங்காமல்","தயவு","தயாரா","தராத","தராதலத்திற்கு","தரிசிக்க","தரும்","தரைமட்டமாகிறது","தரைவரும்","தலைகளுடன்","தலையணையாய்","தலையணையில்","தலையணையையும்","தலையாய","தலையாயின","தலையின்றி","தலையைச","தலையோட்டிற்குள்","தலைவலி","தவளைகள்","தவறாமல்","தவறிவிடக்கூடாதென்ற","தவறிவிட்டாய்","தவறிவைக்கப்பெற்ற","தவறினாலும்","தவறுமல்ல","தவறுவதை","தவிக்கும்","தவித்துக்","தவிர்க்கும்","தவிர்த்து","தழும்புகளை","தள்ளாட","தள்ளாடுகின்றன","தள்ளியபடி","தற்கொலை","தற்செயல்களின்","தனக்காம்புகள்","தனக்கு","தனக்குச்","தனக்குத்","தனக்கே","தனங்களின்","தனது","தனி","தனிச்சுடரது","தனித்த","தனித்தனியாக","தனித்திருக்கையில்","தனித்துக்","தனிநுழைவாயில்","தனிமை","தனியறையின்","தனியாக","தனிவீட்டில்","தன்குழாயை","தன்னைக்குறித்து","தன்னைச்","தன்னைத்தானேதோண்டத்துவங்கினான்","தன்னைப்","தாக்குதல்","தாங்களே","தாங்கியவாறு","தாண்டமுடியாத","தாண்டியிருக்கும்","தாதிகளைக்","தாத்தாப்","தாபத்தில்","தாபத்தின்","தாபநிலவை","தாபம்","தாயே","தாய்","தாராபதத்தினிடையே","தார்ச்சாலை","தார்ச்சாலையை","தாவரங்கள்","தாவித்தாவியோடும்","தாழக்கோல்","தாறுமாறாய்","தானா","தானென்று","தானொரு","தானோ","திகம்பர","திகம்பரச்","திகம்பரத்","திகம்பரமாய்","திகைத்து","திக்குகளையும்","திங்கள்","திசைகாட்டிக்கு","திசைகாட்டியும்","திசைதிருப்பிய","திசையில்","திணறி","திணறும்","திணிக்கப்படுகிறது","திணிக்கப்படுகின்றது","திணிக்கிறேன்","திண்டாடித்","திரட்சிகளின்","திரவமாய்","திரளிலிருந்து","திரிகின்றன","திரிந்த","திரிந்துகொண்டது","திரிந்துகொண்டிருக்கிறார்","திரியும்","திருகல்","திருகியிருக்கின்றன","திருடர்கள்","திருடிய","திருடினாயா","திருட்டுப்பரிசென","திருத்தத்திற்குள்ளான","திருத்தப்படாமல்","திருத்தி","திருத்திக்கொள்ளும்","திருநகத்தழகி","திருநகத்தழகியே","திருநினைவில்","திருநீறென","திருப்தி","திருப்பிரதேசமும்","திருப்பிரதேசம்","திருமண","திரும்பபெறுவது","திரும்பவரும்வரை","திரும்பவேண்டும்","திரும்பியிருக்கவில்லை","திரும்புகிறது","திரும்புங்களென்று","திருவிழாக்கடையில்","திருவோட்டில்","திரைச்சீலைதான்","திளைக்கப்பட","திறக்கப்பட","திறக்காதீர்கள்","திறக்கிறேன்","திறந்துதிறந்து","திறந்துவிடலாமா","திறப்பதுபோல","தினங்களில்","தினத்தன்று","தின்று","தின்றுகொண்டிருப்பான்","தீக்குச்சி","தீச்சோகமாய்","தீண்டிய","தீண்டுகிறது","தீபம்","தீபாராதனை","தீப்பற்றி","தீமையும்","தீர்க்கதரிசன","தீர்க்கதரிசனத்தில்","தீர்த்துவிட்டு","தீர்மானித்துக்கொண்டேன்","தீவம்","தீவளையங்கள்","தீவிரமாய்","தீவைத்து","துடிகொண்டு","துடித்துக்","துடுப்பிசைத்தவாறு","துடைத்துவைப்பதுபோல","துடைப்பத்தை","துணிகளை","துணையோடு","துண்டிக்கப்படுவதைப்","துண்டு","துயரத்தை","துயரத்தோடும்","துயரமோ","துயரம்தான்","துயரின்றி","துயர்தானென்ன","துயிலிறங்க","துயிலின்","துயிலுக்கும்","துரதிருஷ்டவசமாக","துரத்த","துரத்தப்படும்","துரத்தி","துரத்திப்பிடிக்கிறது","துரத்திவிடப்பட்ட","துரத்தும்","துரித","துருத்திக்கொண்டு","துருத்திய","துருப்பிடிக்கத்தக்கதாக","துவைக்கப்போடுகிறார்கள்","துவைக்கப்போடுவார்கள்","துழாவிக்கொண்டிருக்கிறது","துழாவுகின்றன","துளிகளை","துளைகளுக்குள்","துளைக்கின்றன","துள்ளிக்குதிக்கிறது","துள்ளிக்குதிக்கிறான்","துள்ளுவதைப்போல","துறவிகள்","துறைமுகமாகயிருக்க","தூக்கநடையில்","தூக்கமின்மை","தூக்கமின்மையால்","தூக்கமின்மையின்","தூக்கமும்","தூக்கம்","தூக்கிவீசப்பட்ட","தூக்கிவீசுகிறாள்","தூக்குகிறான்","தூக்குக்","தூங்கடி","தூசி","தூசிகள்","தூசியுலகத்து","தூசியூர்","தூசியை","தூரதூரத்திலிருந்து","தூரத்தில்","தூரத்து","தூராதிதூரத்தில்","தூவப்பட்டிருந்தது","தெம்புடன்","தெரிகிறது","தெரிந்ததாயென","தெரியத்","தெரியவந்தது","தெரியாத","தெரியாதே","தெரியுமென்பதுபோல்","தெருக்களினூடே","தெளிக்க","தெளிக்கப்பட","தெளிவாக","தென்னை","தேகத்தில்கூட","தேங்கியிருக்க","தேடிச்","தேடிவரக்கூடுமென்பது","தேடினேன்","தேடுகின்றது","தேடுவது","தேட்டம்","தேமல்த்துண்டினைப்","தேம்பி","தேம்பித்","தேய்வழக்காகிப்போன","தேவாலயங்களை","தேவி","தேள்கடிகாரத்தை","தேன்கூடு","தை","தொங்கவிடுகிறேன்","தொங்கவிட்டபடி","தொங்கவிட்டவாறு","தொங்கியது","தொங்குகிறது","தொங்குவதுபோல்","தொடங்கிய","தொடங்கியது","தொடங்கியபோது","தொடங்கியவன்","தொடங்கியிருந்தான்","தொடங்கிற்று","தொடங்கினான்","தொடங்கினேன்","தொடங்குகிறது","தொடங்குகிறோம்","தொடங்குகின்றன","தொடச்சொல்கிறது","தொடர்ந்து","தொடுவானம்","தொடையிடுக்கிற்குள்","தொடையெடுக்கிலிருந்து","தொட்டிப்பாலம்","தொட்டோம்","தொப்பியிலிருந்து","தொப்புள்கொடி","தொலைகிறது","தொலைக்காட்சி","தொலைதூரம்","தொலைந்தவையெல்லாம்","தொலைந்து","தொலைந்துபோவதற்காக","தொலைபேசி","தொல்","தொழில்","தொற்றுநோய்","தோகையை","தோட்டங்களில்","தோட்டம்","தோணிகள்","தோண்ட","தோண்டத்","தோண்டப்படும்","தோண்டப்பட்ட","தோய்ந்த","தோல்வியை","தோற்ற","தோற்றம்தானோ","தோன்றிற்று","தோன்றுவதெலாம்","நகரம்","நகருங்கள்","நகரும்","நகர்ந்து","நகர்ந்துவிட்டேன்","நகர்வலம்","நங்கூரம்","நசுங்க","நடக்கக்கூடும்","நடக்கத்தொடங்குகிறான்","நடக்கின்றன","நடக்கும்","நடத்தை","நடந்தது","நடந்ததோ","நடந்தால்","நடந்துகொண்டிருக்கையில்","நடந்துகொண்டிருந்தனர்","நடந்துசெல்கிறாள்","நடப்பது","நடனத்தை","நடனமாடிக்","நடனமிடுகின்றன","நடித்துத்தான்","நடுக்கம்","நடைபாதையில்வைத்து","நடையில்","நட்சத்திரங்களின்","நட்சத்திரங்கள்","நட்சத்திரத்திற்கு","நட்சத்திரத்தை","நட்டு","நண்டுக்கூட்டங்கள்","நண்பரைபார்க்கவருவதாகசொல்லியிருந்த","நண்பர்களும்","நண்பனைப்","நண்பனொருவன்","நண்பாயென","நதியிலும்","நதியில்","நதியின்","நமக்கு","நம்பப்போவதில்லை","நம்பமாட்டாயா","நம்பிக்கை","நம்பிக்கையின்","நம்பு","நம்புகிறது","நம்மிடம்","நம்முடைய","நம்மெல்லாரின்","நயனங்களிலிருந்து","நயனங்களின்","நயனங்கள்","நரகத்திற்கு","நரம்புகளில்","நரிகள்","நல்லதுதான்","நழுவிவிழுந்த","நள்ளிரவு","நள்ளென்ற","நனவிலிருந்து","நனவில்","நனைக்கிறது","நனையலாமென","நன்மையும்","நன்னயத்தின்","நாகம்","நாக்கில்","நாக்கை","நாக்கைப்","நாசூக்காக","நாட்களில்","நாட்கள்","நாட்டை","நாணிலேற்றிவிடு","நாதியுமில்லை","நாமும்","நாம்தான்","நாயாக","நாயின்","நாய்களின்","நாய்கள்","நாளங்களை","நாளை","நாளைச்","நாற்காலிகளும்","நாற்றமடிக்கிறது","நானவனை","நானற்ற","நானா","நானென்பதுபோல","நானை","நான்காவது","நான்முகம்","நிகழப்போகிறதென்பதைப்","நிகழப்போவதிலிருந்து","நிகழாத","நிகழாதகாலம்","நிகழும்","நிகழ்கிறது","நிகழ்த்துகின்றன","நிகழ்த்தும்","நிகழ்ந்தகாலம்","நிகழ்ந்தாலும்","நிகழ்ந்திருக்கிறதென்பதை","நிகழ்வு","நிதானமாய்","நிதானம்","நித்தியதோணியென","நித்தியத்துவத்திடமிருந்து","நித்தியத்துவத்தின்","நிமிடத்தை","நிமிர்ந்து","நியாயமும்","நிரப்பப்பட்டிருக்கின்றன","நிரப்பப்பட்டுக்கொண்டிருக்கிறது","நிரப்புவது","நிரம்ப","நிரம்பி","நிரவும்","நிரூபணவாதம்","நிரூபிக்க","நிர்பந்திக்கிறார்கள்","நிர்மாணிக்கப்பட்டதது","நிர்மாணித்து","நிர்மூலமாவதைக்","நிலக்கடலை","நிலக்காட்சி","நிலத்தில்","நிலத்திற்கு","நிலத்தின்","நிலத்தை","நிலவயர்ந்துறங்கும்","நிலவறைகளுக்கு","நிலவறைகள்","நிலவறைக்குள்","நிலவிலிருந்து","நிலவின்","நிலவுக்குச்","நிலவெளியாய்","நிலவெளியின்","நிலவெளியும்","நிலவெளியென","நிலவெளியை","நிலாவைத்தான்","நிலைக்கண்ணாடியில்","நிலைக்கண்ணாடியின்","நிலையத்திலிருந்து","நிலையமாக","நிலையாமை","நிவாரணியென","நிவாரணியே","நிழலசைக்கும்","நிழலிலிருந்து","நிழலின்","நிழலோ","நிழல்கள்","நிழல்காலத்தின்","நிறமுமில்லை","நிறவளையங்கள்","நிறுத்தத்","நிறுத்தத்தில்","நிறுத்தவில்லை","நிறுத்துவதென்று","நிறுவனம்","நிறைக்கிறது","நிறையவே","நிற்கிறதோ","நிற்கிறாள்","நிற்கிறான்","நிற்கிறேன்","நிற்கின்றது","நிற்கின்றார்","நிற்பதை","நினைக்கத்துவங்குகிறாய்","நினைக்கிறீர்கள்","நினைக்கின்றது","நினைத்த","நினைத்தாயோ","நினைத்துக்","நினைத்துக்கொண்டேன்","நினைவாலானதாக","நினைவில்லை","நினைவுகளின்","நினைவுகள்","நினைவுக்கு","நினைவுச்சிதறல்","நினைவுநாள்","நினைவுபடுத்திற்று","நினைவெனவும்","நினைவையும்","நின்றது","நின்றான்","நின்றுகொண்டிருக்கின்றன","நிஜமோயென","நீக்கமற","நீக்கியாகவேண்டும்","நீங்கள்கூட","நீங்கி","நீச்சலாகின்றேன்","நீச்சலும்","நீடிக்க","நீடிக்கிறது","நீட்டிக்கொள்கின்றேன்","நீண்ட","நீதி","நீதியை","நீந்திச்","நீந்துகின்றன","நீந்துகின்றேன்","நீயிருக்கும்போது","நீயில்லை","நீயேதான்","நீயோ","நீரற்ற","நீராடிக்கொண்டிருக்கிறாய்","நீராடும்","நீருக்கடியிலோ","நீரூற்று","நீர்நிலைகள்","நீர்விழுங்குழாயில்","நீல","நீலபொம்மையென","நீலப்","நீலப்பச்சைக்கு","நீலப்பிரகாசப்","நீலப்புலரி","நீலம்","நீலம்வழியும்","நீலரத்தினத்தை","நீள","நீள்கனவொன்று","நீள்கிறது","நுரையீரலை","நுரையீரலைப்","நுரையீரல்","நுழையக்கூடாது","நூற்றாண்டாக","நூற்றுக்கணக்கான","நெகிழா","நெஞ்சுக்கூட்டில்","நெடி","நெடிய","நெடுங்காலத்து","நெடுஞ்சாண்கிடையாக","நெடுவாக்கில்","நெருக்கமாக","நெருங்கிச்","நெருங்கிவிட்டது","நெருப்பிற்குள்","நெருப்பை","நெளியும்","நெறிக்கும்","நெற்றித்திலகமென","நேசிக்கத்தெரியுமென்றான்","நேர","நேருக்கு","நேர்","நேர்காணல்தான்","நேர்ந்திருக்காது","நைந்து","நொடிகளுக்கு","நொடிகளை","நொடிகள்","நொறுங்கிச்","நோட்டீஸ்","நோயாளியை","நோயுற்ற","நோயை","நோய்கள்","நோன்மை","பகலிலிருக்கும்","பகலில்","பகலும்","பகலும்தான்","பகலையும்","பகல்","பகல்களை","பகல்வேளை","பகுதி","பக்கத்திற்கும்","பக்கத்து","பக்கத்தை","பக்கமாகிறது","பசுக்களும்","பசுங்கொடியாய்","பச்சை","பச்சையாக்கத்","பச்சையும்","படகு","படகுகள்","படத்தில்","படத்துக்குள்ளிருந்த","படந்திருக்கும்","படிக்கட்டுகளில்","படிக்கப்படாத","படிக்கப்படும்","படிக்கயியலாத","படித்துக்","படிப்பு","படியாயிற்று","படுகுழிகள்","படுக்கையாயிற்று","படுக்கையின்","படுத்திருக்கிறது","பட்சிகள்","பட்டத்துக்கோமாளி","பட்டாளத்தில்","பட்டியலில்","பட்டையை","பணிச்சுமையிலிருந்து","பணித்திருக்கிறேன்","பணித்துவிட்டார்கள்","பணியாள்","பணியாற்றிக்","பணையம்","பதங்கமாகிப்","பதப்படுத்திவைத்திருக்கும்","பதறி","பதியன்களுக்கு","பதுங்கிக்கொள்கிறது","பத்திரப்படுத்திக்","பத்திலக்க","பந்தம்","பந்தயம்","பயங்கரங்கள்","பயங்கரமாய்","பயங்கரமான","பயங்கரம்","பயணிகள்","பயணிக்கும்","பயணித்திருந்தேன்","பயத்தின்","பயன்படுத்தக்","பயன்படுத்து","பரவும்","பராக்குப்","பரிகளான","பரிசளிக்கப்பட","பரிதாபமாய்","பரிமளத்தில்","பருவ","பருவகாலங்களையா","பருவதங்களையா","பருவதங்கள்","பல","பலஇரவுகளுக்குப்பிறகுகிடைத்ததுஒருபுதையல்","பலகை","பலநூறு","பழகும்","பழம்புது","பள்ளங்களை","பள்ளிக்கூடத்தை","பறக்க","பறக்கப்","பறக்கவிட்டேன்","பறக்கின்றேன்","பறந்துசெல்லவேண்டிய","பறவைக்கூண்டினை","பறவைநிலைக்கு","பறவையென்பதையே","பறவையென்று","பறிக்கக்கேட்டு","பறித்து","பறித்துச்செல்லும்","பற்களுடன்","பற்களைப்","பற்கள்","பற்றி","பற்றிக்கொள்ளுதல்","பற்றியெரியும்","பனிக்கணங்களை","பனிப்பொழிவிலும்","பன்றிக்கூட்டம்போல","பன்னிரண்டிலோயிருக்கும்","பன்னீர்","பன்னெடுங்காலமாய்","பாக்கிவேறு","பாக்கெட்","பாக்கெட்டில்","பாசிபடர்ந்த","பாசியடர்ந்த","பாடாவதி","பாட்டியை","பாட்டில்கள்","பாதங்கள்","பாதத்திற்குள்","பாதாளமனதைச்","பாதி","பாதுகாக்கும்","பாதை","பாதையில்","பாதையை","பாதையொன்று","பாம்புகளின்","பாம்புகள்","பாய","பாயும்","பாய்கிறது","பாய்கிறான்","பாய்ந்தது","பாருங்கள்","பார்க்கமுடியாது","பார்க்கயியலாது","பார்க்காதே","பார்க்கிறான்","பார்க்கிறோம்","பார்க்கின்றது","பார்க்கின்றன","பார்க்கின்றேன்","பார்க்கும்","பார்க்கும்போது","பார்க்கையில்","பார்த்தது","பார்த்துக்கொண்டிருந்தேன்","பார்த்துக்கொண்டிருந்தோம்","பார்த்துக்கொள்ளும்","பார்த்துப்","பார்த்துவிட்ட","பார்ப்பதற்கு","பார்ப்பது","பார்ப்பாள்","பார்வைக்கு","பார்வையாலே","பார்வையால்","பார்வையின்","பாலத்தில்","பாலூட்டும்","பாலையை","பால்ச்சிகரங்கள்","பால்மை","பால்ய","பால்யமா","பால்யம்","பால்வழி","பாவம்","பாவிக்கிறார்கள்","பாவையொருத்தி","பாழ்வானம்","பாறைத்துண்டங்கள்","பாறைத்துண்டாய்","பாறையிடுக்குகளின்","பாறையில்","பாஷைகளில்","பாஷையற்ற","பாஷையில்","பிக்","பிசகில்லை","பிடித்தது","பிடித்திருக்கிறதோ","பிடித்திழுக்க","பிடித்திழுத்துக்","பிடித்துக்","பிடித்துக்கொண்டு","பிடிப்பது","பிணங்களுக்கு","பிணங்கள்","பிணத்துடன்","பிம்பத்தையும்","பிரகாசித்து","பிரசுரிக்கலாம்","பிரச்சினையாக","பிரண்டைக்கொடி","பிரதி","பிரதிபலிப்பு","பிரபஞ்ச","பிரபஞ்சத்தின்","பிரபஞ்சத்துக்கு","பிரபையில்","பிரமையா","பிரமையோ","பிரம்மன்","பிரம்மாண்ட","பிரம்மை","பிரவாகம்","பிரார்த்தனை","பிரிக்கிறீர்கள்","பிரித்துதரும்","பிரித்தெடுத்தன","பிரித்தேன்","பிரியப்படாததாகவும்","பிரியமோ","பிரிவா","பிரிவு","பிரிவை","பிரெளிகை","பில்லி","பிளக்கும்","பிளந்துவிடுகிறது","பிறகின்று","பிறக்கவே","பிறக்கையில்","பிறந்ததிலிருந்து","பிறந்ததுதான்","பிறப்பதற்கு","பிறரிடம்","பிறவி","பிறவியிலே","பிறிதொன்றாக","பிறிதொன்றில்","பிற்பகலின்","பின்தொடரும்","பின்நின்று","பின்னங்கழுத்திடம்","பின்னங்கழுத்து","பின்னங்கழுத்தையோ","பின்னணியில்","பின்னாலும்தான்","பின்னிப்பிணைந்து","பின்னிருந்து","பீடிகைகள்","பீதியின்","பீதியைக்","பீரங்கி","புகை","புகைகளுடன்","புகைச்சுருட்டுகளின்","புகைந்துகொண்டிருக்கின்றது","புகைப்படங்கள்","புகைப்படத்தை","புகைப்படமென","புகைப்படம்","புகைரதம்","புகைவிட்டபடி","புடிச்சேன்","புடைசூழ","புட்டங்களை","புணர்கிறது","புதிய","புதியதாக","புதிரான","புதிர்களோடும்","புதிர்த்தன்மை","புதிர்த்தன்மையின்","புதிர்ப்பாதையை","புது","புதுப்","புதுமை","புதைத்தார்கள்","புதைத்து","புதைத்துக்கொண்டே","புதைப்பது","புதையலை","புதையல்தான்","புத்தகங்களென","புத்தகங்கள்","புத்தகத்தை","புத்தி","புத்திக்குள்","புயலுடன்","புயலை","புயல்","புரட்டுகின்றது","புரண்டுக்கொண்டிருப்பதை","புரண்டுவிழுந்த","புரிந்து","புலப்படவில்லை","புலப்படுகிறது","புலப்படுவதில்","புலர்ந்துவிட்டாலோ","புலன்","புல்லுக்கு","புழுங்கிய","புழுதிசூழ","புள்ளி","புள்ளினங்களோடு","புள்ளினங்கள்","புறத்தில்","புறப்படுகின்றது","புறப்படுதல்","புறம்","புற்கள்","புற்றாய்","புற்றிலிருந்து","புனலுக்கு","புனலென","புனல்","புனல்கரையில்","புனல்பிரதி","புனல்மேனியெங்கும்","புஷ்பக","புஸ்தகங்களை","புஸ்தகத்தின்","பூங்காக்களில்","பூங்காவில்","பூங்காவெங்கும்","பூசாரிகளின்","பூசிக்கொள்கிறேன்","பூச்சியினங்களுக்கு","பூட்டு","பூண்டுள்ளது","பூதம்","பூதவிருளால்","பூத்த","பூமிக்கடியில்","பூமிக்கு","பூமிதான்","பூமித்தட்டுகளின்","பூமியின்","பூமியே","பூமியைவிட","பூரணமும்","பூரணம்","பூரணவெளியில்","பூரான்கள்","பூவென","பெட்டிக்கு","பெட்டிக்குள்","பெட்ரோல்","பெண்களை","பெண்கள்","பெண்ணான","பெண்ணும்","பெண்ணை","பெண்பிள்ளையென","பெயரிட","பெயரிட்டுக்கொண்டேன்","பெயரிட்டுள்ளேன்","பெயரிட்டேன்","பெயரிலிருந்து","பெயரில்லா","பெயரிழந்தவைகளின்","பெயரென","பெயர்களை","பெயர்ச்சொற்களா","பெய்கிற","பெரிதுயர்ந்த","பெரியதாக","பெருஊழி","பெற்ற","பெற்றெடுக்கும்","பேசிக்கொண்டார்கள்","பேசிக்கொண்டிருக்கிறது","பேசிக்கொள்ள","பேசியபோதுதான்","பேசுவதால்","பேச்சே","பேச்சை","பேதலித்து","பேய்களின்","பேரந்தகார","பேரிரைச்சலை","பேருந்தின்","பை","பைசாசங்கள்","பைத்தியம்","பையில்","பையுடன்","பொடிநடையாய்","பொடியையும்","பொட்டலத்தை","பொட்டலம்","பொத்தான்களை","பொத்தி","பொத்தென்று","பொந்துகள்","பொம்மைகளின்","பொருட்களுக்கு","பொருட்களை","பொருட்கள்","பொருட்பெண்டீர்கள்","பொருந்தா","பொருளுக்கு","பொலிவிழந்த","பொல்லாதது","பொழிந்ததங்கு","பொழுதினூடாக","பொழுது","பொறிக்கப்பட்ட","பொறியை","பொறுத்துக்கொண்டேன்","பொறுப்பில்","பொறுப்பு","பொறுமையில்லாத","பொற்காசுகள்","பொன்னிலக்காட்சியை","பொன்னிளங்கொடி","போ","போகவில்லையென","போகாதபாதைகளில்","போகிறாளென்று","போகும்போது","போட்டி","போட்டியில்","போட்டியின்","போட்டு","போதலின்","போதாக்குறைக்கு","போத்தல்","போயிங்","போயிருக்குமென","போயிருந்தேன்","போயிற்று","போய்க்","போய்க்கொண்டிருக்கின்றது","போய்க்கொண்டிருந்தது","போய்விடுகிறோம்","போய்விடுமா","போய்விட்டன","போராடுகிறேன்","போரிடவேண்டியிருக்கிறது","போரிட்டுக்கொண்டு","போர்த்துகிறார்கள்","போர்விமானங்கள்","போர்வையின்","போர்வையும்","போலத்தான்","போலல்ல","போலவேயிருந்தது","போலவேயென","போவதைப்போல","போனாயா","போனால்போகிறது","போனோம்","பௌர்ணமி","ப்ளாட்பாரங்களில்","ப்ளேடு","ப்ளேடுகளுக்கு","ப்ளேடும்","ப்ளேடொன்று","மகத்துவம்","மகவை","மகளீர்","மகா","மகிமா","மகிழ்ச்சியின்","மங்கல","மங்கலாக","மசானமாக","மஞ்சளுமான","மடத்","மடித்து","மடிப்புகளுக்கடியில்","மடியும்","மடையில்","மணலாய்","மணலான","மணற்கடிகாரம்","மணி","மணிகள்","மணிக்கணக்காக","மணிச்சப்தங்களை","மணித்துளிகள்","மணிமாலையைதியானத்தில்","மணியோசையும்","மண்டல","மண்டலத்தின்","மண்டைக்குள்ளொரு","மண்ணகழும்","மண்ணுக்கும்","மண்படர்ந்துபரவுகின்றேன்","மதில்ச்சுவர்","மதுவின்","மத்தம்","மத்தியானங்களின்","மத்தியானமாக","மத்தியானம்","மத்தியானவேளையில்","மந்தணம்","மந்திரம்தானென்று","மந்திரவாதி","மயக்கத்தையா","மயக்கமயம்","மயானத்திற்கு","மரகதககணங்கள்","மரகதகணங்களா","மரகதகணங்கள்","மரக்கட்டையின்","மரங்களடர்ந்த","மரங்களின்","மரணத்திற்கு","மரணம்","மரத்திற்கு","மரத்திற்குப்","மரத்தைப்","மரத்தோடு","மரமாக","மரமாகி","மரமாய்","மரமில்லாமல்","மரமும்","மரிக்க","மரித்தவர்கள்","மருத்துவமனையில்","மருத்துவமனையின்","மருத்துவர்களும்","மருத்துவர்களோ","மருந்து","மருந்தை","மரை","மர்மமான","மலர","மலரும்","மலரொன்றிருந்தது","மலர்கள்","மலர்கின்றது","மலர்ந்திருந்ததுஎப்படியோ","மலர்ந்துவிட்டது","மலைதான்","மலைப்பாம்பின்","மலையுச்சி","மல்லாந்து","மல்லிகைமொட்டு","மல்லுக்கட்டுகிறது","மழலை","மழலையர்","மழியாத்தாடி","மழைக்","மழைக்காலங்களில்","மழைக்காலமும்","மழைக்கு","மழையில்","மழையில்லை","மறதியாக","மறதியில்லை","மறதியை","மறந்த","மறந்துபோன","மறந்துவிடுகிறேனாம்","மறந்துவிடுவது","மறந்துவிட்டது","மறந்துவிட்டிருக்கிறேன்","மறப்பது","மறுக்க","மறுக்கும்படி","மறுத்தேன்","மறுநாளுக்கு","மறுபடியும்","மறுபிறவி","மறுப்பதுமாக","மறுப்பாய்யெனில்","மறுப்பேனா","மறுமலர்ச்சிகால","மறுரூபம்","மறைகின்றது","மறைக்கப்படும்","மறைக்கப்பட்டவை","மறைக்கிறது","மறைந்தபடியே","மறைந்தவர்களை","மறைந்திருந்து","மறைந்திருப்பதில்","மறைந்துசெல்லும்","மறையத்தானோ","மறைவிடம்","மற்றவர்களெல்லாம்","மற்றெல்லா","மற்றொருவன்","மனசு","மனதின்","மனதை","மனநிலையிலிருந்து","மனநோயும்","மனநோய்","மனம்","மனம்திரும்பிவிடாதா","மனிதக்கரங்கள்","மனிதனுக்கு","மனிதனைப்","மனோநிலை","மனோநிலைக்","மன்மதனும்","மாட்டாயா","மாண்ட","மாதவியும்","மாதவியென","மாதவியை","மாநிறச்","மாநிறத்தில்","மாயத்தோற்றம்","மாயமரங்களின்","மாயவேடம்","மாயாசாலத்திற்கான","மாயை","மாயையின்","மாயையை","மார்","மார்கழி","மார்க்கங்","மார்பகங்களை","மார்பகங்கள்","மார்பின்மீது","மாலை","மாலையிலிருந்து","மாறாக","மாறி","மாறிய","மாறியிருக்கிறது","மாறிவிடுகிறது","மாறிவிட்டதைப்","மாறிவிட்டவன்","மாறுகின்றது","மாற்றங்கள்","மாற்றிக்கொண்டிருக்கிறாள்","மானுடமற்ற","மானுடனாக","மானை","மான்கள்","மிகஅரிய","மிகச்சாவகாசமாய்","மிச்சம்","மிதக்கவிடுகிறார்கள்","மிதக்கிறது","மிதக்கின்றன","மிதந்தன","மிதந்து","மிதமிஞ்சியிருப்பது","மியுசியத்தில்","மிளகு","மினுங்காத","மினுங்கும்","மினுமினுப்பு","மின்தூசிகள்","மின்மினிகள்","மின்னஞ்சல்களில்","மின்னலுக்கு","மின்னல்வெட்டாய்","மின்னிமறைகிறது","மின்னும்","மிஷினின்","மிஷினுக்கு","மிஷினை","மிஷின்","மீட்சி","மீட்டுக்கொள்வது","மீண்டெழுந்து","மீதிகள்","மீதிருக்கும்","மீதுருக்கும்","மீதெல்லாமோ","மீள","மீன்காரி","முகங்கண்டு","முகத்தில்","முகத்திற்கெதிராக","முகத்தின்","முகத்துக்கெதிராக","முகத்தைப்","முகமிருப்பதை","முகமுடைய","முகரலாம்","முகவரி","முகாமுக்கு","முகிலில்வைத்து","முகிலும்","முகிலென","முகில்களால்","முகில்களுக்கு","முகில்களை","முடி","முடிகிறது","முடியா","முடியாத","முடியாதபடிக்கு","முடியாமல்","முடிவடையவில்லை","முடிவின்றி","முடிவுக்கும்","முடிவேயில்லாமல்","முடிவைத்","முட்கள்","முட்டிக்கொண்டு","முணுமுணுக்க","முணுமுணுத்தன","முதலடியை","முதலாய்","முதலாவது","முதன்","முதுகிலிருந்து","முதுகுவரை","முதுமையின்","முத்தமிடுவதற்கான","முத்தமிட்டுக்","முத்தமிட்டுக்கொண்டிருக்கிறான்","முத்து","முந்தைய","மும்முரமாக","மும்முறை","முயல்","முயல்கிறேன்","முயல்வது","முயற்சித்தேன்","முயன்ற","முலைகளைக்","முலைப்பாலின்","முழு","முளைக்கின்றன","முளைத்து","முள்","முள்வேலிகளில்","முறிந்துவிழுகிறது","முறைக்கத்தொடங்குகின்றன","முறைதான்","முறைத்துக்","முறையில்","முறையில்லா","முற்பிறவி","முற்றத்தில்","முற்றுப்புள்ளியென","முன்பின்","முன்ராத்திரி","முன்னதாகவே","முன்னறிச்செல்கிறது","முன்னால்","முன்னிருக்கையில்","முன்னூறு","முன்னேகுகின்றன","மூக்குக்கண்ணாடியை","மூக்குச்சளிபோல","மூக்கை","மூச்சை","மூடப்படுகின்றன","மூடிமறைத்திருக்க","மூடியைத்திருகி","மூடிவைத்திருந்தான்","மூட்டி","மூட்டைக்கட்டுதலின்","மூதுடலை","மூலைகளில்","மூழ்கிக்","மூளைக்கும்","மூளையை","மூளைவந்தது","மூன்றாவது","மெட்ரிக்","மெய்","மெய்மைக்கு","மெலிந்த","மெல்லுதடுகளை","மெழுகுவர்த்தி","மெனக்கெடலுடன்","மென்நீல","மென்மடிப்புகள்","மென்மொழி","மேகங்களை","மேடைக்குக்கு","மேய","மேய்த்துச்செல்கின்றன","மேய்ந்துகொண்டிருக்கும்","மேலிருந்து","மேற்கு","மேனி","மேனிகொண்ட","மைக்கில்","மைதானம்","மைந்தன்","மையம்","மைய்யலை","மைய்யல்மையம்","மைல்களுக்கு","மைனா","மொட்டினை","மொட்டின்","மொட்டைமாடி","மொட்டைமாடிக்கு","மொட்டைமாடியில்","மொத்தமாக","மொய்க்கிறது","மொழி","மோதி","மோதிப்பறக்கும்","மோதிரத்திலிருக்கும்","மோதிரம்","மோதுகிறேன்","மௌனமாக","யன்னல்களைத்","யாத்ரீகர்கள்","யாமத்தில்","யாமத்தின்","யாமள","யாராலும்","யாரால்","யாரென்று","யாரேனும்","யாரைவிட்டும்","யாவற்றிலும்","யானை","யானையின்","யிருந்திருக்க","யில்லை","யுவதிகள்","யுவதியை","யெடுக்கப்பட்டு","யெதையும்","யெப்படி","யெல்லாவற்றிற்கும்","யெழுதயியலவில்லை","யெழுப்பியபடி","யென","யெனக்கு","யென்பதுனக்குத","யென்னதான்","யோசித்து","யோசிப்பதற்குள்","யோனிகளைக்","யோனியே","ரகசியமாக","ரகசியமாய்","ரத","ரதியும்","ரத்தக்குழாயினுள்","ரத்தக்கொதிப்பிலிருந்து","ரத்தச்சிவப்பில்","ரத்தநாளங்களின்","ரத்தினமென","ரப்பர்ச்","ரம்","ரம்மியென","ரயிலே","ரயிலை","ரஹ்மான்","ராட்சத","ராட்டினத்தில்","ராவோடுராவாக","ராஜ்ஜியத்தில்","ரீங்காரங்கள்","ருதுவடைவதற்குள்","ரூபத்தில்","ரோட்டில்","ரோஜாச்","ரோஜாப்","லட்சம்","லட்சிணை","லத்தியொன்று","லயித்திருக்கும்","லாரிகள்","லாரியில்","லாவாவென","வகுப்பெடுக்கின்றன","வகையில்","வசந்தநினைவு","வசப்பட்ட","வசிக்கின்றனர்","வசிப்பது","வசியப்பட்டதென","வடிந்துகொண்டிருக்கிறது","வடிவமுமில்லை","வடிவை","வட்டமிட","வட்டமிடுகிறது","வணிகவளாகத்தில்","வண்டியைப்","வண்ண","வண்ணத்திடமிருந்து","வண்ணத்தில்","வண்ணத்துப்பூச்சிப்","வண்ணநினைவுதான்","வண்ணமில்லை","வண்ணம்","வதைக்கிறது","வந்த","வந்தபோது","வந்தவர்கள்","வந்தவழியை","வந்தாயோ","வந்தாய்","வந்தாலும்","வந்தான்","வந்திருக்கக்கூடாது","வந்திருக்கலாம்","வந்துகொண்டிருக்கும்","வந்துகொண்டிருந்தது","வந்துசேர","வந்துநிற்கும்","வந்துவிடக்கூடாது","வந்துவிடுகிறது","வந்தேயாகவேண்டும்","வயதிலோ","வயதும்","வயதையும்","வயதொன்றுமில்லை","வயிற்றிலிருந்து","வர","வரக்கூடுமென்று","வரத்தொடங்கிற்று","வரப்படுகிறாய்","வரமளிக்கின்றனர்","வரமுடியாதா","வரவேற்கிறது","வரவேற்கின்றது","வரவேற்பு","வராதீர்கள்","வரி","வரிக்கு","வருகிறதென்றான்","வருகிறோம்","வருகின்ற","வருகின்றனவாம்","வருகின்றான்","வருகின்றேன்","வருகையில்","வருகையென","வருட","வருதுபார்","வருத்தத்திலிருக்கிறது","வருமாயென","வரும்போது","வரும்போதெல்லாம்","வருவதில்லை","வருவேன்","வருஷங்களாலான","வருஷங்களைப்","வரைகிறது","வரைத்தொடர்கள்","வரைந்தோய்ந்து","வரையடிவாரத்தில்","வரையப்பட்ட","வரையிலிருந்து","வலதும்","வலம்வரும்","வலிக்கூறக்கூடாதென","வலுவாக","வல்லது","வல்லதென்றும்","வல்லோனின்","வழக்கமான","வழக்கம்","வழக்கம்போல","வழங்க","வழமைக்கு","வழிகாட்டும்","வழிகிறேன்","வழிசொல்ல","வழித்துணையாக","வழிநடத்தியபடி","வழிந்தேயாக","வழியுண்டா","வழியும்","வழியே","வழுக்கி","வளர்க்கிறது","வளர்ந்து","வளைகுடாக்களைப்போலவிளம்பரச்","வளைந்துநெளிந்து","வளையங்கள்","வளையல்துண்டுகள்","வளையவளைய","வளையோசை","வளைவுப்பாதைகளுக்கு","வறட்டு","வற்புறுத்த","வற்புறுத்தி","வற்றச்","வற்றியிருக்கும்","வன்முறையை","வஸ்திரம்","வாகனநெரிசலில்","வாக்கியத்தை","வாக்கியம்","வாங்கப்பட்ட","வாங்கப்பட்டது","வாங்கப்பெறும்","வாங்கி","வாங்கிவந்திருக்கவேண்டும்","வாசகரே","வாசலும்","வாசனை","வாசித்துப்பார்க்கையில்","வாடகை","வாடிக்கையாகிவிட்டது","வாடைகளினூடே","வாடையின்","வாடையுடன்","வாட்சண்டையில்","வாத்தியங்கள்","வாந்தியெடுத்தான்","வாயில்","வாய்ந்தவன்","வாராணசியை","வாருங்கள்","வாலிபன்","வாலென","வாழும்","வாழ்கின்றன","வாழ்க்கை","வாழ்க்கையற்ற","வாழ்க்கையே","வாழ்க்கையை","வாழ்த்துகூடச்","வாழ்ந்தாகவேண்டும்","வாழ்ந்தால்தான்","வாழ்வுக்காக","வாழ்வும்","வாழ்வோ","வான","வானவில்லைப்","வானவிளிம்பில்","வானில்","விசனப்பட","விஞ்சியும்","விடாதே","விடியும்","விடிவெள்ளி","விடுகதையைப்","விடுதிக்கு","விடுதியின்","விடுப்பெடுத்துவிட்டு","விடுவார்கள்","விட்டான்","விட்டுச்சென்ற","விட்டுவைக்கவில்லை","விட்டேன்","விண்","விண்ணகத்தின்","விண்ணகத்து","விண்ணப்பபடிவமும்","விண்ணவர்களை","விண்ணில்","விண்ணுக்குமாய்","விண்ணுலகத்து","விண்ணோக்கிய","விதமாய்","விதிக்கும்","விதியாய்ச்","விதியை","வித்தகரான","விநியோகிக்க","விபத்துக்குள்ளாக","விமானங்களுக்கு","வியக்க","வியப்பிற்குச்","வியர்த்துக்கொட்டுகிறது","வியாகுல","வியாகுலங்கள்","வியாகுலமோ","வியாகுலம்","விரலென","விரலையும்","விரல்","விரவிக்","விரிக்கிறது","விரிக்கின்றேன்","விருட்சங்களையா","விருட்சங்கள்","விருப்பமில்லை","விரும்பவில்லை","விரும்பாததாகவும்","விலக்கிக்","விலையுயர்ந்த","வில்லென","விவாதித்துக்","விழாக்கோலம்","விழாவுக்குச்","விழிகளை","விழிக்கின்றது","விழித்தபிறகும்","விழிப்பிற்குமிடையே","விழிப்பும்","விழியெல்லாம்","விழிவிரிய","விழிவிரியமிரட்சியுடன்பார்க்கிறது","விழுகிறது","விழுகின்றன","விழுங்க","விழுங்கிவிடாதபடி","விழுந்து","விழுந்துகொண்டிருக்கின்றன","விழுமென்று","விழும்","விளக்கங்களுக்கு","விளக்கங்கள்","விளக்கத்","விளக்காவிடில்","விளக்கின்","விளக்கு","விளக்குகளை","விளக்கேற்றப்படும்","விளங்கவில்லை","விளங்கிக்கொண்டார்","விளிம்பில்","விளிம்பிற்கு","விளிம்பை","விளையாட","விளையாடயழைத்தது","விளையாடிக்","விளையாடினோம்","விளையாடுதல்","விறகின்","விறகுகளை","விறுவிறுப்பாய்","விற்பவர்கள்","வினைச்சொற்களா","விஷத்தாவரங்கள்","விஷப்பாட்டிலின்மடியில்தூங்கிக்கொண்டிருந்தது","விஷயத்தையும்","வீசிக்கொண்டு","வீசியா","வீசியிருந்தான்","வீடியோ","வீடுகளை","வீடும்","வீடுவந்து","வீடுவிட்டு","வீட்டிலிருந்து","வீட்டிற்கு","வீட்டுக்கதவுகளிலும்","வீட்டுக்கிழுத்து","வீட்டைவிட்டு","வீணாக்குகிறீர்கள்","வீதியிலிறங்குகிறது","வீழ்வை","வெங்காயங்களை","வெட்டப்படுகின்றன","வெட்டவெளி","வெட்டிக்கொண்டிருப்பதை","வெட்டிச்செல்கிறது","வெட்டுக்கிளியென","வெண்மையான","வெளவால்களும்","வெளிச்சத்தை","வெளியின்","வெளியுமாய்","வெளியேயும்","வெளியேவருகையில்","வெளியேற","வெளியேறுவதை","வெளியேற்ற","வெளியொரு","வெளிவரமுடியாது","வெளிறிய","வெளுப்பதற்காக","வெள்ளத்தில்","வெள்ளம்","வெள்ளென்ற","வெறிக்கிறது","வெறிக்கிறோம்","வெறித்துக்","வெறித்துக்கொண்டிருக்கிறேன்","வெறிபிடித்த","வெறுப்பினுடையதென்கிறது","வெறுப்பின்","வெற்றிலை","வெற்றிலைக்","வெற்றுப்","வேகமாகச்","வேடம்தரித்து","வேடிக்கைப்","வேட்டையாடுபவனைப்","வேண்டி","வேண்டியதுதான்","வேண்டியிருக்கிறது","வேண்டியிருக்கிறார்","வேண்டுமென","வேண்டுமென்றான்","வேதாந்தியிடம்","வேம்பில்","வேலைவாய்ப்புள்ள","வேவுபார்க்கிறது","வேளை","வேளையாக","வேறொன்றும்","வேறொன்றைச்","வேற்றுக்கிரகத்திலிருந்து","வேனிற்","வேனிற்காலம்","வை","வைக்கப்பட்டிருக்கிறதோ","வைக்கமுடியுமா","வைக்கிறாய்","வைக்கின்றது","வைத்தவாறு","வைத்தானென்பது","வைத்திருக்கிறேன்","வைத்திருக்கும்","வைத்திருந்ததால்","வைத்திருந்தனர்","வைத்திருப்பது","வைத்துக்கொள்ளவா","வையகமே","வைராக்கியமும்","வைராக்கியம்","ஜகத்தீரே","ஜாபம்","ஜீவரத்தினத்தை","ஜீவிதமும்","ஜூடோ","ஜொலிக்கக்","ஜோடிகளின்","ஸ்டேஷன்களை","ஸ்தனங்களிலிருந்து","ஸ்பரிசித்த","ஹெராயினென","ஹெராயின்"],"freq":[69,46,45,38,30,22,21,21,18,18,17,14,13,13,13,13,12,12,12,11,11,11,11,10,10,10,10,10,10,9,9,9,9,9,9,9,9,9,9,9,8,8,8,8,8,8,8,8,8,8,7,7,7,7,7,7,7,7,7,7,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,6,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],"fontFamily":"Latha","fontWeight":"bold","color":["#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC","#2E2C1F","#556B2F","#6B8E23","#8F9779","#EAE7DC"],"minSize":0,"weightFactor":2.608695652173913,"backgroundColor":"white","gridSize":0,"minRotation":-0.7853981633974483,"maxRotation":0.7853981633974483,"shuffle":true,"rotateRatio":0.4,"shape":"circle","ellipticity":0.65,"figBase64":null,"hover":null},"evals":[],"jsHooks":{"render":[{"code":"function(el,x){\n                        console.log(123);\n                        if(!iii){\n                          window.location.reload();\n                          iii = False;\n\n                        }\n  }","data":null}]}}</script>
+<script type="application/htmlwidget-sizing" data-for="htmlwidget-689bff90322f56d45b01">{"viewer":{"width":450,"height":350,"padding":0,"fill":true},"browser":{"width":960,"height":500,"padding":0,"fill":true}}</script>
+</body>
+</html>
