@@ -49,7 +49,7 @@ A word cloud is a simple visualization that shows the most frequent words in a t
 - **Gift books** (`golden-sunset`, `tiny-cockroach`) and **Shared favorite books and text** (`little-prince`, `peacock-blue`, `the-lullaby`): HTML only, **no original text uploaded**. Intended for personal viewing by the recipient.  
 - **Public domain book** (`happy-prince`): © Oscar Wilde, 1888, Public Domain, from 
 <a href="https://www.gutenberg.org/files/902/902-0.txt" target="_blank">Project Gutenberg</a>,
-R Code, HTML, and sample images included. You are free to use/adapt for educational purposes. [Happy Prince Wordclouds](happy-prince/) 
+R Code, HTML, and sample images included. You are free to use/adapt for educational purposes. [See: Happy Prince ](happy-prince/) 
 - Original authors are acknowledged.
 
 ---
