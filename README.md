@@ -30,6 +30,7 @@ A word cloud is a simple visualization that shows the most frequent words in a t
 
 *Thank you for sharing this little learning-journey with me.* 🌿
 
+---
 
 ## 🔍 How to View
 
@@ -96,6 +97,8 @@ wordclouds-project/
 - Oscar Wilde, for The *Happy Prince and Other Tales*.  
 - V.N.Surya, for his Poems.  
 - ChatGPT, for technical guidance on R scripting, Markdown formatting, and wordcloud visualization.
+
+
 
 ✨ Created with ♡ | Personal and ethical sharing only | [View source on GitHub](https://github.com/yourusername/wordclouds-project)
 
