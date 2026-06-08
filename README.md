@@ -77,7 +77,7 @@ wordclouds-project/
 ├─ peacock-blue/             <-- Shared favorite book: "Neelam – Vanmurasu 4" by Jeyamohan
 │   └─ index.html            <-- HTML only
 │
-├─ the-lullaby/              <-- Passage from "Muthalavin – Venmurasu 26" by Jeyamohan
+└─ the-lullaby/              <-- Passage from "Muthalavin – Venmurasu 26" by Jeyamohan
     └─ index.html            <-- HTML only
 
 ```</pre>
